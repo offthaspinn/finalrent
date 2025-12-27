@@ -7,10 +7,12 @@ if not _key:
 
 fernet = Fernet(_key.encode() if isinstance(_key, str) else _key)
 
+
 def encrypt(value: str | None) -> str | None:
     if not value:
         return None
     return fernet.encrypt(value.encode()).decode()
+
 
 def decrypt(value: str | None) -> str | None:
     if not value:

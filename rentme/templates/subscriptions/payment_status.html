@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <h2>Payment Status</h2>
+
+  <div id="status-container">
+    {% if subscription %}
+      <div id="confirmed">
+        <p>Subscription confirmed: <strong>{{ subscription.plan_name }}</strong></p>
+        <p>Price: {{ subscription.amount_paid }}</p>
+        <p>Active until: {{ subscription.expires_at }}</p>
+      </div>
+    {% elif pending_plan %}
+      <div id="pending">
+        <p>You attempted to subscribe to: <strong>{{ pending_plan.name }}</strong></p>
+        <p>Price: {{ pending_plan.price }}</p>
+        <p id="pending-msg">Status: Pending confirmation (check your payment provider).</p>
+        <p id="polling-msg" style="display:none;">Checking for confirmation…</p>
+      </div>
+    {% else %}
+      <p>No pending subscription found.</p>
+    {% endif %}
+  </div>
+
+  {% if not subscription and pending_plan %}
+  <script>
+    (function () {
+      const checkUrl = "{{ url_for('subscriptions.payment_status_check') }}";
+      const maxAttempts = 12;           // poll up to ~1 minute (12 * 5s)
+      const intervalMs = 5000;
+      let attempts = 0;
+      const pollingMsg = document.getElementById('polling-msg');
+      const pendingMsg = document.getElementById('pending-msg');
+
+      function startPolling() {
+        pollingMsg.style.display = 'inline';
+        pendingMsg.style.display = 'none';
+        poll();
+      }
+
+      function poll() {
+        attempts += 1;
+        fetch(checkUrl, { credentials: 'same-origin' })
+          .then(resp => resp.json())
+          .then(data => {
+            if (data.ok) {
+              renderConfirmed(data);
+            } else if (attempts < maxAttempts) {
+              setTimeout(poll, intervalMs);
+            } else {
+              pollingMsg.textContent = 'Still pending. If this persists, check your payments page or contact support.';
+            }
+          })
+          .catch(() => {
+            if (attempts < maxAttempts) {
+              setTimeout(poll, intervalMs);
+            } else {
+              pollingMsg.textContent = 'Unable to confirm payment right now.';
+            }
+          });
+      }
+
+      function renderConfirmed(data) {
+        const container = document.getElementById('status-container');
+        container.innerHTML = `
+          <div id="confirmed">
+            <p>Subscription confirmed: <strong>${escapeHtml(data.plan_name)}</strong></p>
+            <p>Price: ${escapeHtml(data.amount_paid)}</p>
+            <p>Active until: ${escapeHtml(data.expires_at)}</p>
+          </div>
+        `;
+      }
+
+      // small helper to avoid injecting raw HTML
+      function escapeHtml(str) {
+        if (str === null || str === undefined) return '';
+        return String(str)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      // start polling after a short delay so the page renders first
+      setTimeout(startPolling, 800);
+    })();
+  </script>
+  {% endif %}
+{% endblock %}

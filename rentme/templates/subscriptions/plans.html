@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h2>Choose a Subscription Plan</h2>
+
+{% for plan in plans %}
+  <div style="border:1px solid #ccc; padding:15px; margin-bottom:15px;">
+    <h3>{{ plan.name }}</h3>
+    <p>Price: KES {{ plan.price }}</p>
+    <p>Max Properties: {{ plan.max_properties }}</p>
+
+    <form method="POST" action="{{ url_for('subscriptions.pay_plan', plan_id=plan.id) }}">
+      {{ form.hidden_tag() }}
+
+      <div>
+        {{ form.phone.label }}<br>
+        {{ form.phone(class="form-control") }}
+      </div>
+
+      <br>
+      {{ form.submit(class="btn btn-primary") }}
+    </form>
+  </div>
+{% endfor %}
+
+{% if pending_plan %}
+  <p><strong>Pending payment for plan ID {{ pending_plan }}</strong></p>
+{% endif %}
+
+{% endblock %}

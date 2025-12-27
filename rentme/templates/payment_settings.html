@@ -1,38 +1,75 @@
-<!-- templates/payment_settings.html -->
-<form method="POST" action="{{ url_for('payments.save_settings') }}">
-  <label>Shortcode (Paybill/Till)</label>
-  <input name="shortcode" value="{{ mpcred.shortcode or '' }}" required />
+<!-- templates/settings_payment.html -->
+<form method="POST" action="{{ url_for('landlord_settings.settings_payment') }}">
+  {{ form.hidden_tag() }}
 
-  <label>Shortcode Type</label>
-  <select name="shortcode_type">
-    <option value="paybill" {% if mpcred.shortcode_type=='paybill' %}selected{% endif %}>Paybill</option>
-    <option value="till" {% if mpcred.shortcode_type=='till' %}selected{% endif %}>Till</option>
-  </select>
+  <!-- Payment Method -->
+  <label for="payment_method">Payment Method</label>
+  {{ form.payment_method(class="form-control") }}
 
-  <label>Consumer Key</label>
-  <input name="consumer_key" value="" placeholder="Enter consumer key" required />
+  <!-- MPesa Fields -->
+  <h4>MPesa Settings</h4>
+  <label for="paybill_number">Paybill Number</label>
+  {{ form.paybill_number(class="form-control") }}
 
-  <label>Consumer Secret</label>
-  <input name="consumer_secret" value="" placeholder="Enter consumer secret" required />
+  <label for="till_number">Till / BuyGoods Number</label>
+  {{ form.till_number(class="form-control") }}
 
-  <label>Passkey (STK Push)</label>
-  <input name="passkey" value="" placeholder="Enter passkey" required />
+  <label for="send_money_number">Send Money Receiver (phone)</label>
+  {{ form.send_money_number(class="form-control") }}
 
-  <label>Callback URL</label>
-  <input name="callback_url" value="{{ mpcred.callback_url or default_callback }}" required />
+  <label for="phone_number">Display Phone (optional)</label>
+  {{ form.phone_number(class="form-control") }}
 
-  <label>Environment</label>
-  <select name="mpesa_env">
-    <option value="sandbox" {% if mpcred.mpesa_env=='sandbox' %}selected{% endif %}>Sandbox</option>
-    <option value="production" {% if mpcred.mpesa_env=='production' %}selected{% endif %}>Production</option>
-  </select>
+  <label for="mpesa_consumer_key">Daraja: Consumer Key</label>
+  {{ form.mpesa_consumer_key(class="form-control") }}
 
-  <label>Payment method</label>
-  <select name="payment_method">
-    <option value="stk">STK Push</option>
-    <option value="paybill">Paybill (C2B)</option>
-    <option value="sendmoney">SendMoney (Manual)</option>
-  </select>
+  <label for="mpesa_consumer_secret">Daraja: Consumer Secret</label>
+  {{ form.mpesa_consumer_secret(class="form-control") }}
 
-  <button type="submit">Save</button>
+  <label for="mpesa_shortcode">BusinessShortCode / Shortcode</label>
+  {{ form.mpesa_shortcode(class="form-control") }}
+
+  <label for="mpesa_passkey">Daraja: Passkey</label>
+  {{ form.mpesa_passkey(class="form-control") }}
+
+  <label for="mpesa_mode">Daraja Mode</label>
+  {{ form.mpesa_mode(class="form-control") }}
+
+  <!-- KCB Fields -->
+  <h4>KCB Paybill Settings</h4>
+  <label for="kcb_paybill">KCB Paybill</label>
+  {{ form.kcb_paybill(class="form-control") }}
+
+  <label for="kcb_api_key">KCB API Key</label>
+  {{ form.kcb_api_key(class="form-control") }}
+
+  <label for="kcb_callback_url">KCB Callback URL</label>
+  {{ form.kcb_callback_url(class="form-control") }}
+
+  <label for="kcb_env">KCB Environment</label>
+  {{ form.kcb_env(class="form-control") }}
+
+  <button type="submit" class="btn btn-primary">{{ form.submit.label.text }}</button>
 </form>
+
+<script>
+async function testMpesa() {
+    const resp = await fetch("{{ url_for('landlord_settings.test_payment') }}", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "mpesa" })
+    });
+    const data = await resp.json();
+    alert(data.msg);
+}
+
+async function testKCB() {
+    const resp = await fetch("{{ url_for('landlord_settings.test_payment') }}", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "kcb" })
+    });
+    const data = await resp.json();
+    alert(data.msg);
+}
+</script>

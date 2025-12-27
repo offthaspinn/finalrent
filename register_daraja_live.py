@@ -31,8 +31,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 console_handler = logging.StreamHandler(sys.stdout)
 console_handler.setLevel(logging.INFO)
-console_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+console_handler.setFormatter(
+    logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+)
 logger.addHandler(console_handler)
+
 
 # =======================================================
 # UTILITIES
@@ -52,6 +55,7 @@ def clean_url(u: str, live: bool = False) -> str:
 
     return urllib.parse.urlunparse(parsed._replace(fragment=""))
 
+
 def pretty_print_response(resp):
     """Pretty-print Daraja JSON responses."""
     try:
@@ -60,10 +64,13 @@ def pretty_print_response(resp):
     except Exception:
         logger.warning(resp.text)
 
+
 # =======================================================
 # CORE REGISTRATION LOGIC
 # =======================================================
-def register_urls(env_name, base_url, key, secret, shortcode, callback_base, live=False):
+def register_urls(
+    env_name, base_url, key, secret, shortcode, callback_base, live=False
+):
     result = {"env": env_name, "status": "failed", "response": None}
     logger.info(f"\n🔐 Attempting {env_name} Daraja registration...")
 
@@ -106,7 +113,12 @@ def register_urls(env_name, base_url, key, secret, shortcode, callback_base, liv
     logger.info(f"📡 Registering for {env_name}:\n{json.dumps(payload, indent=2)}")
 
     try:
-        res = requests.post(f"{base_url}/mpesa/c2b/v1/registerurl", headers=headers, json=payload, timeout=10)
+        res = requests.post(
+            f"{base_url}/mpesa/c2b/v1/registerurl",
+            headers=headers,
+            json=payload,
+            timeout=10,
+        )
     except Exception as e:
         logger.error(f"{env_name}: Registration request failed → {e}")
         return result
@@ -121,7 +133,9 @@ def register_urls(env_name, base_url, key, secret, shortcode, callback_base, liv
     try:
         body = res.json()
         if body.get("errorCode") == "500.003.1001":
-            logger.info(f"ℹ️ {env_name}: Already registered (duplicate). Treating as success.")
+            logger.info(
+                f"ℹ️ {env_name}: Already registered (duplicate). Treating as success."
+            )
             result.update(status="success", response=body)
             return result
     except Exception:
@@ -130,6 +144,7 @@ def register_urls(env_name, base_url, key, secret, shortcode, callback_base, liv
     logger.warning(f"⚠️ {env_name}: Registration failed ({res.status_code}) → {body}")
     result.update(response=body)
     return result
+
 
 # =======================================================
 # INTERACTIVE CLI MODE
@@ -141,23 +156,37 @@ def run_registration_interactive():
     consumer_key = input("Consumer Key: ").strip()
     consumer_secret = input("Consumer Secret: ").strip()
     shortcode = input("Short Code: ").strip()
-    callback_base = input("Callback Base URL (https://xxxx.ngrok-free.app/payment_callback): ").strip()
+    callback_base = input(
+        "Callback Base URL (https://xxxx.ngrok-free.app/payment_callback): "
+    ).strip()
 
     if not all([consumer_key, consumer_secret, shortcode, callback_base]):
         print("❌ Missing required fields. Try again.")
         sys.exit(1)
 
     live = env_choice == "live"
-    base_url = "https://api.safaricom.co.ke" if live else "https://sandbox.safaricom.co.ke"
+    base_url = (
+        "https://api.safaricom.co.ke" if live else "https://sandbox.safaricom.co.ke"
+    )
 
-    result = register_urls(env_choice.upper(), base_url, consumer_key, consumer_secret, shortcode, callback_base, live=live)
+    result = register_urls(
+        env_choice.upper(),
+        base_url,
+        consumer_key,
+        consumer_secret,
+        shortcode,
+        callback_base,
+        live=live,
+    )
     print("\n🏁 Final Result:")
     print(json.dumps(result, indent=2))
+
 
 # =======================================================
 # FLASK WEB UI MODE
 # =======================================================
 app = Flask(__name__)
+
 
 @app.route("/")
 def index():
@@ -169,13 +198,16 @@ def index():
     </ul>
     """
 
+
 @app.route("/register_live")
 def register_live():
     return render_template("register_live.html")
 
+
 @app.route("/register_sandbox")
 def register_sandbox():
     return render_template("register_sandbox.html")
+
 
 @app.route("/api/register", methods=["POST"])
 def api_register():
@@ -190,10 +222,15 @@ def api_register():
         return jsonify({"status": "error", "message": "All fields are required"}), 400
 
     live = env == "live"
-    base_url = "https://api.safaricom.co.ke" if live else "https://sandbox.safaricom.co.ke"
+    base_url = (
+        "https://api.safaricom.co.ke" if live else "https://sandbox.safaricom.co.ke"
+    )
 
-    result = register_urls(env.upper(), base_url, key, secret, shortcode, callback, live)
+    result = register_urls(
+        env.upper(), base_url, key, secret, shortcode, callback, live
+    )
     return jsonify(result)
+
 
 # =======================================================
 # ENTRYPOINT

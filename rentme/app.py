@@ -12,15 +12,27 @@ import pytz
 from dateutil.relativedelta import relativedelta
 from dotenv import load_dotenv
 import random
-
+from rentme.forms import CreatePropertyForm
 
 from flask import (
-    Flask, render_template, request, redirect, url_for,
-    flash, send_from_directory, jsonify, abort, Response
+    Flask,
+    render_template,
+    request,
+    redirect,
+    url_for,
+    flash,
+    send_from_directory,
+    jsonify,
+    abort,
+    Response,
 )
 from flask_login import (
-    LoginManager, login_user, logout_user,
-    login_required, current_user, UserMixin
+    LoginManager,
+    login_user,
+    logout_user,
+    login_required,
+    current_user,
+    UserMixin,
 )
 from flask import Flask, Blueprint, render_template, request, redirect, url_for, flash
 
@@ -31,10 +43,13 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.security import generate_password_hash, check_password_hash
 import redis
+# at the top of rentme/app.py (with your other imports)
+from flask import current_app, request, session, url_for, redirect
+
 # Local imports
 from rentme.extensions import db, mail, limiter
 from rentme.config import Config
-from rentme.models import User, Tenant, Payment, AuditLog
+from rentme.models import User, Tenant, Payment, AuditLog, Plan, Property, Subscription
 from rentme.mpesa_handler import mpesa_bp
 from rentme.landlord_settings import landlord_settings_bp
 from register_daraja_live import register_urls
@@ -49,6 +64,14 @@ from flask_wtf import CSRFProtect
 from sqlalchemy import or_
 from sqlalchemy import func
 from rentme.forms import ResetPasswordForm
+from rentme.routes.subscriptions import subscriptions_bp
+from flask_migrate import Migrate
+from rentme.payments.intasend_bp import intasend_bp
+from rentme.forms import CreatePropertyForm
+from pytz import timezone
+from rentme.subscriptions.utils import subscription_required
+
+
 
 
 # -----------------------
@@ -62,6 +85,7 @@ load_dotenv()
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 APK_FOLDER = os.path.join(BASE_DIR, "static", "apk")
 
+migrate = Migrate()
 
 # -----------------------
 # Create Flask app
@@ -71,7 +95,7 @@ from rentme.routes import *
 
 if __name__ == "__main__":
     app.run(debug=True)
-    
+
 app.config.from_object(Config)
 
 # Redis connection (optional, for production rate limiting)
@@ -80,7 +104,7 @@ REDIS_URL = os.getenv("REDIS_URL")
 limiter = Limiter(
     app=app,
     key_func=get_remote_address,
-    storage_uri=REDIS_URL if REDIS_URL else "memory://"
+    storage_uri=REDIS_URL if REDIS_URL else "memory://",
 )
 
 # -----------------------
@@ -92,7 +116,7 @@ if not SECRET_KEY:
 
 app.config["SECRET_KEY"] = SECRET_KEY
 
-db_url = os.getenv("DATABASE_URL") 
+db_url = os.getenv("SQLALCHEMY_DATABASE_URI")
 app.config["SQLALCHEMY_DATABASE_URI"] = db_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
@@ -104,9 +128,10 @@ db.init_app(app)
 csrf = CSRFProtect(app)
 mail.init_app(app)
 limiter.init_app(app)
-Migrate(app, db)
-
+migrate.init_app(app, db)
+csrf.init_app(app)
 csrf.exempt(mpesa_bp)
+csrf.exempt(intasend_bp)
 
 
 # -----------------------
@@ -118,6 +143,7 @@ login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = "login"
 login_manager.login_message_category = "warning"
+
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -137,16 +163,21 @@ def load_user(user_id):
 
     return user
 
+
 # -----------------------
 # Timezone helpers
 # -----------------------
 NAIROBI_TZ = pytz.timezone("Africa/Nairobi")
+
+
 def to_nairobi(dt):
     if dt is None:
         return None
     if dt.tzinfo is None:
         dt = pytz.utc.localize(dt)
     return dt.astimezone(NAIROBI_TZ)
+
+
 app.jinja_env.filters["to_nairobi"] = to_nairobi
 
 # -----------------------
@@ -155,6 +186,13 @@ app.jinja_env.filters["to_nairobi"] = to_nairobi
 app.register_blueprint(mpesa_bp, url_prefix="/mpesa")
 print("✅ M-Pesa Blueprint active at /mpesa")
 app.register_blueprint(landlord_settings_bp, url_prefix="/settings")
+
+app.register_blueprint(subscriptions_bp)
+
+
+app.register_blueprint(intasend_bp)
+
+
 # -----------------------
 # Debug logger
 # -----------------------
@@ -178,6 +216,7 @@ if app.config.get("ENV") == "development":
         except Exception as e:
             print(f"⚠️ JSON parse error: {e}")
 
+
 # -----------------------
 # DB + Scheduler
 # -----------------------
@@ -185,6 +224,8 @@ if app.config.get("ENV") == "development":
 # -----------------------
 # Audit helper
 # -----------------------
+
+
 # -----------------------
 # Audit helper (NON-BLOCKING)
 # -----------------------
@@ -201,6 +242,7 @@ def audit(user, action, meta=""):
         db.session.rollback()
         app.logger.warning("Audit log failed: %s", e)
 
+
 # -----------------------
 # Decorators
 # -----------------------
@@ -216,15 +258,19 @@ def ensure_apk_exists(func):
             return redirect(url_for("dashboard"))
         kwargs["_apk_filename"] = apk_files[0]
         return func(*args, **kwargs)
+
     return wrapper
+
 
 def owner_required(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
-        tenant_id = (kwargs.get("tenant_id") 
-                     or request.view_args.get("tenant_id") 
-                     or request.form.get("tenant_id") 
-                     or request.args.get("tenant_id"))
+        tenant_id = (
+            kwargs.get("tenant_id")
+            or request.view_args.get("tenant_id")
+            or request.form.get("tenant_id")
+            or request.args.get("tenant_id")
+        )
         if not tenant_id:
             abort(400, description="Tenant ID missing.")
         tenant = Tenant.query.get(int(tenant_id))
@@ -232,12 +278,14 @@ def owner_required(func):
             abort(404, description="Tenant not found.")
         if not current_user.is_authenticated:
             return redirect(url_for("login", next=request.path))
-        if tenant.owner_id != current_user.id and not current_user.is_admin:
+        if tenant.property_id != current_user.id and not current_user.is_admin:
             flash("No permission.", "danger")
             return redirect(url_for("tenant_list"))
         kwargs["_tenant_obj"] = tenant
         return func(*args, **kwargs)
+
     return wrapper
+
 
 # -----------------------
 # Routes
@@ -277,7 +325,7 @@ def register():
             full_name=form.full_name.data.strip(),
             email=email,
             login_phone=phone,
-            password_hash=generate_password_hash(form.password.data)
+            password_hash=generate_password_hash(form.password.data),
         )
 
         try:
@@ -291,7 +339,7 @@ def register():
         audit(
             user,
             "user_registered",
-            f"email:{user.email}, phone:{user.login_phone or '-'}"
+            f"email:{user.email}, phone:{user.login_phone or '-'}",
         )
 
         flash("Registration successful! You can now login.", "success")
@@ -300,19 +348,19 @@ def register():
     return render_template("register.html", form=form)
 
 
+# Login
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if current_user.is_authenticated:
         return redirect(url_for("dashboard"))
 
     form = LoginForm()
+
     if form.validate_on_submit():
         identifier = form.identifier.data.strip()
         password = form.password.data
 
-        # Try email first
         user = User.query.filter_by(email=identifier.lower()).first()
-        # Then phone if not found
         if not user:
             user = User.query.filter_by(login_phone=identifier).first()
 
@@ -322,13 +370,173 @@ def login():
 
         login_user(user)
         audit(user, "user_logged_in", f"id:{user.id}")
+
+        # 🚫 NO LOGOUT HERE
+        if not user.has_active_subscription():
+            flash(
+                "Your subscription has expired. Please choose a plan to continue.",
+                "warning",
+            )
+            return redirect(url_for("subscriptions.list_plans"))
+
         flash("Welcome back!", "success")
         return redirect(request.args.get("next") or url_for("dashboard"))
 
     return render_template("login.html", form=form)
 
 
-# -----------------------
+# ======================================================
+# ======================================================
+# 🔐 GLOBAL ACCESS ENFORCEMENT
+# ======================================================
+@app.before_request
+def enforce_property_and_subscription():
+    if not current_user.is_authenticated:
+        return
+
+    endpoint = request.endpoint or ""
+    endpoint_name = endpoint.split(".")[-1] if endpoint else ""
+
+    current_app.logger.debug(
+        "before_request endpoint=%s endpoint_name=%s method=%s session=%s",
+        endpoint, endpoint_name, request.method, dict(session),
+    )
+
+    ALLOWED_ENDPOINTS = {
+        "static",
+        "login",
+        "logout",
+        "select_property",
+        "activate_property",
+        "create_property",
+        "subscriptions.list_plans",
+        "subscriptions.pay_plan",
+        "subscriptions.payment_status",
+        "profile",
+    }
+
+    # Allow any subscriptions.* endpoint
+    if endpoint.startswith("subscriptions."):
+        return
+
+    # Allow POSTs to reach their handlers (prevents redirects from preempting form submissions)
+    if request.method == "POST":
+        return
+
+    # If user has no active subscription, redirect to plans unless endpoint is allowed
+    if not current_user.has_active_subscription():
+        if endpoint not in ALLOWED_ENDPOINTS and endpoint_name not in ALLOWED_ENDPOINTS:
+            return redirect(url_for("subscriptions.list_plans"))
+
+    # If user has an active subscription but no active property selected,
+    # redirect to select_property unless endpoint is allowed
+    if current_user.has_active_subscription():
+        if "active_property_id" not in session:
+            if endpoint not in ALLOWED_ENDPOINTS and endpoint_name not in ALLOWED_ENDPOINTS:
+                return redirect(url_for("select_property"))
+
+
+# ======================================================
+# 🏠 PROPERTIES
+# ======================================================
+@app.route("/properties")
+@login_required
+@subscription_required
+def select_property():
+    properties = (
+        Property.query
+        .filter_by(owner_id=current_user.id)
+        .order_by(Property.id.asc())
+        .all()
+    )
+
+    form = CreatePropertyForm()
+
+    return render_template(
+        "properties.html",
+        properties=properties,
+        can_create=current_user.can_create_property(),
+        form=form,
+    )
+
+
+@app.route("/properties/<int:property_id>/activate")
+@login_required
+def activate_property(property_id):
+    prop = Property.query.filter_by(
+        id=property_id,
+        owner_id=current_user.id
+    ).first_or_404()
+
+    session["active_property_id"] = prop.id
+
+    flash(f"Switched to {prop.name}", "success")
+    return redirect(url_for("dashboard"))
+
+
+# ======================================================
+# 🏠 CREATE PROPERTY
+# ======================================================
+@app.route("/properties/create", methods=["GET", "POST"])
+@login_required
+@subscription_required
+def create_property():
+    form = CreatePropertyForm()
+
+    current_app.logger.debug(
+        "create_property called; endpoint=%s; method=%s; session=%s; has_active=%s; can_create=%s; form_errors=%s",
+        request.endpoint,
+        request.method,
+        dict(session),
+        current_user.has_active_subscription(),
+        current_user.can_create_property(),
+        form.errors,
+    )
+
+    if form.validate_on_submit():
+        current_app.logger.debug("create_property form validated; form.errors=%s", form.errors)
+
+        # Enforce subscription limits
+        if not current_user.can_create_property():
+            current_app.logger.info("User %s cannot create more properties (limit reached).", current_user.email)
+            flash("Your plan does not allow you to add another property.", "warning")
+            return redirect(url_for("select_property"))
+
+        name = form.name.data.strip()
+        password = form.password.data
+
+        # Confirm password
+        if not current_user.check_password(password):
+            current_app.logger.info("User %s provided incorrect password when creating property.", current_user.email)
+            flash("Incorrect password. Property not created.", "danger")
+            return redirect(url_for("select_property"))
+
+        # Create property with safe commit
+        prop = Property(owner_id=current_user.id, name=name)
+        try:
+            db.session.add(prop)
+            db.session.commit()
+        except Exception:
+            current_app.logger.exception("Failed to create property for user %s", current_user.email)
+            db.session.rollback()
+            flash("An error occurred while creating the property.", "danger")
+            return redirect(url_for("select_property"))
+
+        # Auto-activate property in session after successful commit
+        session["active_property_id"] = prop.id
+        current_app.logger.info("Set active_property_id=%s in session for user=%s", prop.id, current_user.email)
+
+        audit(current_user, "property_created", f"id:{prop.id}")
+        flash("New property created successfully!", "success")
+        return redirect(url_for("dashboard"))
+
+    # If POST but validation failed, log errors
+    if request.method == "POST":
+        current_app.logger.debug("create_property POST but validation failed; errors=%s", form.errors)
+
+    return render_template("create_property.html", form=form)
+
+
 @app.route("/logout")
 @login_required
 def logout():
@@ -374,25 +582,31 @@ def forgot_password():
             return redirect("/forgot-password")
 
         # Try SMS first
-        sent_sms = send_sms_via_africastalking(user.login_phone, f"Your Rentana reset code is {code}")
+        sent_sms = send_sms_via_africastalking(
+            user.login_phone, f"Your Rentana reset code is {code}"
+        )
 
         # Fallback to email if SMS failed or credentials missing
         if not sent_sms:
             sent_email = send_reset_email(
                 user.email,
                 "Rentana Password Reset",
-                f"Your Rentana password reset code is {code}"
+                f"Your Rentana password reset code is {code}",
             )
             if sent_email:
                 flash("Reset code sent to your email.", "success")
             else:
-                flash("Could not send reset code via SMS or email. Contact support.", "danger")
+                flash(
+                    "Could not send reset code via SMS or email. Contact support.",
+                    "danger",
+                )
         else:
             flash("A reset code has been sent to your phone.", "success")
 
         return redirect("/reset-password")
 
     return render_template("forgot_password.html", form=form)
+
 
 # -----------------------------------------------------
 # RESET PASSWORD
@@ -441,17 +655,19 @@ def reset_password():
     return render_template("reset_password.html", form=form)
 
 
-
 # ✅ Helper Functions
 # =====================================
-#DUPLICATEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE
+# DUPLICATEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE
 ##3def process_payment(phone, amount, receipt, note="")
 
-#manifesss
+# manifesss
+
 
 @app.route("/manifest.json")
 def manifest():
-    return send_from_directory('static', 'manifest.json', mimetype='application/manifest+json')
+    return send_from_directory(
+        "static", "manifest.json", mimetype="application/manifest+json"
+    )
 
 
 # Optional: health check
@@ -460,106 +676,124 @@ def manifest():
 def health_check():
     return jsonify({"status": "ok", "message": "Webhook is alive"}), 200
 
+
 # ----------------------
 # Optional: simulate a test payment (offline)
 
 
 # -----------------------
 # -----------------------
-# Dashboard
+# ======================================================
+# 📊 Dashboard
+# ======================================================
 
-from pytz import timezone
 NAIROBI_TZ = timezone("Africa/Nairobi")
 
 
 @app.route("/")
 @login_required
+@subscription_required
 def dashboard():
-    """Render landlord dashboard."""
+    """
+    Render landlord dashboard UI.
+    Actual data is loaded via /dashboard_data
+    """
+    # Ensure a property is selected
+    if "active_property_id" not in session:
+        return redirect(url_for("select_property"))
+
     return render_template("dashboard.html")
 
 
 @app.route("/dashboard_data")
 @login_required
+@subscription_required
 def dashboard_data():
     """
-    Return live dashboard data as JSON:
+    Return live dashboard data as JSON (PROPERTY-SCOPED):
       - Tenant details
       - Totals: expected, collected, outstanding
       - Collected percentage
     """
 
-    # 🧭 Get all tenants for this landlord
+    # 🏠 Active property context
+    property_id = session.get("active_property_id")
+    if not property_id:
+        return jsonify({"error": "No active property selected"}), 400
+
+    # 🧭 Get tenants ONLY for active property
     tenants = (
         Tenant.query
-        .filter_by(owner_id=current_user.id)
-        .order_by(Tenant.name)
+        .filter_by(property_id=property_id)
+        .order_by(Tenant.name.asc())
         .all()
     )
 
-    # 💰 Compute totals (based on real tenant data)
-    total_expected = sum((t.total_due_since() or 0) for t in tenants)
-    total_collected = sum((t.total_paid() or 0) for t in tenants)
+    # 💰 Compute totals
+    total_expected = sum((t.total_due_since() or 0.0) for t in tenants)
+    total_collected = sum((t.total_paid() or 0.0) for t in tenants)
 
-    # Outstanding (cannot be negative even if tenant overpaid)
-    total_outstanding = round(max(total_expected - total_collected, 0), 2)
+    # Outstanding (never negative)
+    total_outstanding = round(max(total_expected - total_collected, 0.0), 2)
 
-    # Collection %
+    # Collection percentage
     collected_percent = (
-        round((total_collected / total_expected * 100), 2)
-        if total_expected else 0.0
+        round((total_collected / total_expected) * 100, 2)
+        if total_expected > 0
+        else 0.0
     )
 
-    # 🏠 Prepare tenant info for dashboard table
+    # 🏠 Tenant table payload
     tenants_list = []
     for t in tenants:
-        paid = t.total_paid() or 0
-        due = t.total_due_since() or 0
-        balance = paid - due
+        paid = t.total_paid() or 0.0
+        due = t.total_due_since() or 0.0
+        balance = round(paid - due, 2)
 
         tenants_list.append({
             "id": t.id,
             "name": t.name,
             "phone": t.phone,
             "house_no": t.house_no,
-            "monthly_rent": float(t.monthly_rent or 0),
+            "monthly_rent": float(t.monthly_rent or 0.0),
             "total_paid": float(paid),
             "total_due": float(due),
             "balance": float(balance),
             "formatted_balance": f"{balance:,.2f}",
         })
 
-    # 📤 Return dashboard stats + tenants
+    # 📤 JSON response for dashboard UI
     return jsonify({
         "total_tenants": len(tenants),
         "total_expected": round(total_expected, 2),
         "total_collected": round(total_collected, 2),
         "total_outstanding": total_outstanding,
         "collected_percent": collected_percent,
-        "tenants": tenants_list
+        "tenants": tenants_list,
     })
 
-
-#payment type
+# payment type
 # -----------------------
-
 
 
 # Tenants CRUD
 # ----------------------
 
+
 @app.route("/tenants")
 @login_required
+@subscription_required
 def tenant_list():
     q = request.args.get("q", "", type=str).strip()
     page = request.args.get("page", 1, type=int)
     per_page = 20
 
-    query = Tenant.query.filter(
-        Tenant.owner_id == current_user.id
-    )
+    property_id = session.get("active_property_id")
+    if not property_id:
+        return redirect(url_for("select_property"))
 
-    # 🔎 Case-insensitive search
+    query = Tenant.query.filter(Tenant.property_id == property_id)
+
     if q:
         search = f"%{q.lower()}%"
         query = query.filter(
@@ -570,74 +804,72 @@ def tenant_list():
             )
         )
 
-    pagination = query.order_by(
-        Tenant.house_no.asc()
-    ).paginate(
-        page=page,
-        per_page=per_page,
-        error_out=False
+    pagination = query.order_by(Tenant.house_no.asc()).paginate(
+        page=page, per_page=per_page, error_out=False
     )
 
-    # ⚡ AJAX response
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-        rows_html = render_template(
-            "_tenant_rows.html",
-            tenants=pagination.items
-        )
-        pagination_html = render_template(
-            "_tenant_pagination.html",
-            pagination=pagination,
-            query=q
-        )
         return jsonify({
-            "rows": rows_html,
-            "pagination": pagination_html
+            "rows": render_template("_tenant_rows.html", tenants=pagination.items),
+            "pagination": render_template(
+                "_tenant_pagination.html", pagination=pagination, query=q
+            ),
         })
 
-    # 🧱 Normal page load
     return render_template(
         "tenant_list.html",
         tenants=pagination.items,
         pagination=pagination,
-        query=q
+        query=q,
     )
-
 
 
 @app.route("/tenant/add", methods=["GET", "POST"])
 @login_required
+@subscription_required
 def tenant_add():
+    # 🔒 Must have an active property
+    property_id = session.get("active_property_id")
+    if not property_id:
+        flash("Please select a property first.", "warning")
+        return redirect(url_for("select_property"))
+
     form = TenantForm()
 
     if form.validate_on_submit():
         try:
-            move_in = form.move_in_date.data or str(date.today())
             t = Tenant(
-                owner_id=current_user.id,
+                property_id=property_id,  # ✅ FIXED
                 name=form.name.data.strip(),
                 phone=form.phone.data.strip(),
-                national_id=form.national_id.data.strip(),
+                national_id=form.national_id.data.strip()
+                if form.national_id.data
+                else None,
                 house_no=form.house_no.data.strip(),
                 monthly_rent=float(form.monthly_rent.data),
-                move_in_date=datetime.strptime(move_in, "%Y-%m-%d").date()
+                move_in_date=form.move_in_date.data or date.today(),
             )
-        except Exception:
-            flash("Invalid tenant data.", "danger")
-            return render_template("add_tenant.html", form=form)
 
-        db.session.add(t)
-        db.session.commit()
-        audit(current_user, "tenant_added", meta=f"id:{t.id}")
-        flash("Tenant added.", "success")
-        return redirect(url_for("dashboard"))
+            db.session.add(t)
+            db.session.commit()
+
+            audit(current_user, "tenant_added", meta=f"id:{t.id}")
+
+            flash("Tenant added successfully.", "success")
+            return redirect(url_for("dashboard"))
+
+        except Exception as e:
+            db.session.rollback()
+            flash("Invalid tenant data.", "danger")
+            print("TENANT ADD ERROR:", e)
 
     return render_template("add_tenant.html", form=form)
-
 
 
 # ---------- EDIT TENANT ----------
 @app.route("/tenant/<int:tenant_id>/edit", methods=["GET", "POST"])
 @login_required
+@subscription_required
 @owner_required
 def tenant_edit(tenant_id, _tenant_obj=None):
 
@@ -682,37 +914,42 @@ def tenant_edit(tenant_id, _tenant_obj=None):
     return render_template("edit_tenants.html", tenant=t)
 
 
-
 # ---------- DELETE TENANT ----------
 @app.route("/tenant/<int:tenant_id>/delete", methods=["POST"])
 @login_required
-@owner_required
-def tenant_delete(tenant_id, _tenant_obj=None):
+@subscription_required
+def tenant_delete(tenant_id):
+    property_id = session.get("active_property_id")
+    if not property_id:
+        flash("Select a property first.", "warning")
+        return redirect(url_for("select_property"))
 
-    # Lookup object if decorator didn't inject it
-    t = _tenant_obj or Tenant.query.get_or_404(tenant_id)
+    tenant = Tenant.query.get_or_404(tenant_id)
 
-    # Validate CSRF
+    # 🔒 HARD PROPERTY PERMISSION
+    if tenant.property_id != property_id:
+        abort(403)
+
+    # ✅ CSRF validation
     try:
         validate_csrf(request.form.get("csrf_token"))
     except ValidationError:
-        flash("Invalid or missing CSRF token. Try again.", "danger")
+        flash("Invalid or missing CSRF token.", "danger")
         return redirect(url_for("tenant_list"))
 
-    db.session.delete(t)
+    db.session.delete(tenant)
     db.session.commit()
 
-    audit(current_user, "tenant_deleted", meta=f"id:{tenant_id}")
+    audit(current_user, "tenant_deleted", meta=f"id:{tenant.id}")
     flash("Tenant deleted successfully!", "info")
 
     return redirect(url_for("tenant_list"))
-
-
 
 # ---------- BULK DELETE ----------
 # -----------------------
 @app.route("/tenants/bulk-delete", methods=["POST"])
 @login_required
+@subscription_required
 def tenant_bulk_delete():
 
     # Validate CSRF
@@ -731,7 +968,7 @@ def tenant_bulk_delete():
     q = Tenant.query.filter(Tenant.id.in_(ids))
 
     if not current_user.is_admin:
-        q = q.filter(Tenant.owner_id == current_user.id)
+        q = q.filter(Tenant.property_id == current_user.id)
 
     tenants = q.all()
     count = len(tenants)
@@ -761,57 +998,42 @@ def tenant_bulk_delete():
 
     flash(f"{count} tenant(s) deleted successfully.", "success")
     return redirect(url_for("tenant_list"))
+
+
 # -----------------------
 # Payments CRUD
 # -----------------------
-@app.route("/payment/add", methods=["GET", "POST"], endpoint="payment_add")
+@app.route("/payment/add", methods=["GET", "POST"])
 @login_required
-@owner_required
-def payment_add(_tenant_obj=None, tenant_id=None):
-    tenant = _tenant_obj
+@subscription_required
+def payment_add():
+    property_id = session.get("active_property_id")
+    if not property_id:
+        flash("Select a property first.", "warning")
+        return redirect(url_for("select_property"))
 
-    # 🧩 SAFETY: Always resolve tenant if not injected
-    if tenant is None:
-        # Try URL kwarg first (from /payment/add?tenant_id=X or route param)
-        tid = tenant_id or request.args.get("tenant_id") or request.form.get("tenant_id")
-        if tid:
-            try:
-                tid_int = int(tid)
-            except ValueError:
-                tid_int = None
-            if tid_int:
-                tenant = Tenant.query.filter_by(id=tid_int, owner_id=current_user.id).first()
-
-    # If still no tenant → redirect
-    if tenant is None:
-        flash("Bad request: Tenant not found or missing tenant ID.", "danger")
+    # Resolve tenant
+    tenant_id = request.args.get("tenant_id") or request.form.get("tenant_id")
+    if not tenant_id:
+        flash("Tenant not specified.", "danger")
         return redirect(url_for("tenant_list"))
 
+    tenant = Tenant.query.get_or_404(int(tenant_id))
+
+    # 🔒 PROPERTY CHECK
+    if tenant.property_id != property_id:
+        abort(403)
+
     if request.method == "POST":
-        # 🔐 1) Get password from form (filled by popup / modal JS)
         password = (request.form.get("password_confirm") or "").strip()
-
-        if not password:
-            flash("Password confirmation is required to add a payment.", "danger")
+        if not password or not current_user.check_password(password):
+            flash("Incorrect password.", "danger")
             return render_template("add_payment.html", tenant=tenant)
 
-        # 🔐 2) Verify user password using your User model method
-        try:
-            is_valid = current_user.check_password(password)
-        except AttributeError:
-            # Fallback if your User model doesn't have check_password()
-            from werkzeug.security import check_password_hash
-            is_valid = check_password_hash(current_user.password_hash, password)
-
-        if not is_valid:
-            flash("Incorrect password. Payment was not added.", "danger")
-            return render_template("add_payment.html", tenant=tenant)
-
-        # ✅ 3) Validate amount
         try:
             amount = float(request.form.get("amount") or 0)
         except ValueError:
-            flash("Amount must be a number.", "danger")
+            flash("Amount must be numeric.", "danger")
             return render_template("add_payment.html", tenant=tenant)
 
         if amount <= 0:
@@ -820,82 +1042,92 @@ def payment_add(_tenant_obj=None, tenant_id=None):
 
         note = (request.form.get("note") or "").strip()
 
-        # ✅ 4) Auto-generate unique transaction ID
         import uuid
-        transaction_id = request.form.get("transaction_id")
-        if not transaction_id or transaction_id.strip() == "":
-            transaction_id = f"MANUAL-{uuid.uuid4().hex[:8].upper()}"
-
         from datetime import datetime
-        p = Payment(
+
+        transaction_id = (
+            request.form.get("transaction_id")
+            or f"MANUAL-{uuid.uuid4().hex[:8].upper()}"
+        )
+
+        payment = Payment(
             tenant_id=tenant.id,
             amount=amount,
             note=note,
             transaction_id=transaction_id,
-            paid_at=datetime.utcnow()
+            paid_at=datetime.utcnow(),
         )
 
-        # ✅ 5) Commit safely
-        try:
-            db.session.add(p)
-            db.session.commit()
-        except Exception as e:
-            db.session.rollback()
-            print(f"[ERROR] Payment commit failed: {e}")
-            flash("Error: Payment could not be saved. Please try again.", "danger")
-            return render_template("add_payment.html", tenant=tenant)
+        db.session.add(payment)
+        db.session.commit()
 
-        # ✅ 6) Audit log
         audit(
             current_user,
             "payment_added",
-            meta=f"payment_id:{p.id}, tenant_id:{tenant.id}, transaction_id:{transaction_id}"
+            meta=f"payment_id:{payment.id}, tenant_id:{tenant.id}",
         )
 
-        flash(f"✅ Payment recorded successfully — Amount: {amount}, ID: {transaction_id}", "success")
-        return redirect(url_for("dashboard"))
+        flash("Payment added successfully.", "success")
+        return redirect(url_for("tenant_list"))
 
-    # GET
     return render_template("add_payment.html", tenant=tenant)
 
 
 @app.route("/payment/<int:payment_id>/edit", methods=["GET", "POST"])
 @login_required
+@subscription_required
 def payment_edit(payment_id):
-    p = Payment.query.get_or_404(payment_id)
-    if p.tenant.owner_id != current_user.id and not current_user.is_admin:
-        flash("Not authorized.", "danger")
-        return redirect(url_for("tenant_list"))
+    property_id = session.get("active_property_id")
+
+    payment = Payment.query.get_or_404(payment_id)
+
+    # 🔒 PROPERTY CHECK VIA TENANT
+    if payment.tenant.property_id != property_id:
+        abort(403)
+
     if request.method == "POST":
         try:
-            p.amount = float(request.form.get("amount") or p.amount)
+            payment.amount = float(request.form.get("amount") or payment.amount)
         except ValueError:
-            flash("Amount must be a number.", "danger")
-            return render_template("payment_edit.html", payment=p)
-        p.note = request.form.get("note") or ""
+            flash("Amount must be numeric.", "danger")
+            return render_template("payment_edit.html", payment=payment)
+
+        payment.note = request.form.get("note") or ""
         db.session.commit()
-        audit(current_user, "payment_edited", meta=f"id:{p.id}")
+
+        audit(current_user, "payment_edited", meta=f"id:{payment.id}")
         flash("Payment updated.", "success")
-        return redirect(url_for("dashboard"))
-    return render_template("payment_edit.html", payment=p)
+        return redirect(url_for("tenant_list"))
+
+    return render_template("payment_edit.html", payment=payment)
 
 
 @app.route("/payments")
 @login_required
+@subscription_required
 def payment_list():
-    payments = (Payment.query.join(Tenant)
-                .filter(Tenant.owner_id == current_user.id)
-                .order_by(Payment.paid_at.desc())
-                .all())
+    property_id = session.get("active_property_id")
+    if not property_id:
+        return redirect(url_for("select_property"))
+
+    payments = (
+        Payment.query
+        .join(Tenant)
+        .filter(Tenant.property_id == property_id)
+        .order_by(Payment.paid_at.desc())
+        .all()
+    )
+
     return render_template("payment_list.html", payments=payments)
 
 
 # Bulk pay
-@app.route('/bulk_pay', methods=['POST'])
+@app.route("/bulk_pay", methods=["POST"])
 @login_required
+@subscription_required
 def bulk_pay():
-    tenant_ids = request.form.getlist('tenant_ids')
-    amount_raw = request.form.get('amount')
+    tenant_ids = request.form.getlist("tenant_ids")
+    amount_raw = request.form.get("amount")
     if not tenant_ids or not amount_raw:
         flash("Tenant(s) or amount missing.", "warning")
         return redirect(url_for("tenant_list"))
@@ -921,29 +1153,56 @@ def bulk_pay():
 # Exports
 # -----------------------
 def make_csv_response(csv_text: str, filename="export.csv"):
-    return Response(csv_text, mimetype="text/csv",
-                    headers={"Content-disposition": f"attachment; filename={filename}"})
+    return Response(
+        csv_text,
+        mimetype="text/csv",
+        headers={"Content-disposition": f"attachment; filename={filename}"},
+    )
 
 
 @app.route("/export/tenants.csv")
 @login_required
+@subscription_required
 def export_tenants_csv():
     base_q = Tenant.query
     if not current_user.is_admin:
-        base_q = base_q.filter_by(owner_id=current_user.id)
+        base_q = base_q.filter_by(property_id=current_user.id)
     si = io.StringIO()
     cw = csv.writer(si)
-    cw.writerow(["id","name","phone","national_id","house_no","monthly_rent","move_in_date","total_paid","total_due","balance"])
+    cw.writerow(
+        [
+            "id",
+            "name",
+            "phone",
+            "national_id",
+            "house_no",
+            "monthly_rent",
+            "move_in_date",
+            "total_paid",
+            "total_due",
+            "balance",
+        ]
+    )
     for t in base_q.order_by(Tenant.name).all():
-        cw.writerow([
-            t.id, t.name, t.phone, t.national_id, t.house_no,
-            f"{t.monthly_rent:.2f}", t.move_in_date.isoformat(),
-            f"{t.total_paid():.2f}", f"{t.total_due_since():.2f}", f"{t.balance:.2f}"
-        ])
+        cw.writerow(
+            [
+                t.id,
+                t.name,
+                t.phone,
+                t.national_id,
+                t.house_no,
+                f"{t.monthly_rent:.2f}",
+                t.move_in_date.isoformat(),
+                f"{t.total_paid():.2f}",
+                f"{t.total_due_since():.2f}",
+                f"{t.balance:.2f}",
+            ]
+        )
     return make_csv_response(si.getvalue(), "tenants_export.csv")
 
 
-#daraja register
+# daraja register
+
 
 @app.route("/register_daraja", methods=["POST"])
 def register_daraja():
@@ -953,22 +1212,38 @@ def register_daraja():
     shortcode = request.form.get("shortcode")
     callback = request.form.get("callback_url")
 
-    base_url = "https://api.safaricom.co.ke" if env == "live" else "https://sandbox.safaricom.co.ke"
-    result = register_urls(env.upper(), base_url, key, secret, shortcode, callback, live=(env == "live"))
+    base_url = (
+        "https://api.safaricom.co.ke"
+        if env == "live"
+        else "https://sandbox.safaricom.co.ke"
+    )
+    result = register_urls(
+        env.upper(), base_url, key, secret, shortcode, callback, live=(env == "live")
+    )
     return jsonify(result)
 
 
 @app.route("/export/payments.csv")
 @login_required
+@subscription_required
 def export_payments_csv():
     base_q = Payment.query.join(Tenant)
     if not current_user.is_admin:
-        base_q = base_q.filter(Tenant.owner_id == current_user.id)
+        base_q = base_q.filter(Tenant.property_id == current_user.id)
     si = io.StringIO()
     cw = csv.writer(si)
-    cw.writerow(["id","tenant_id","tenant_name","amount","note","paid_at"])
+    cw.writerow(["id", "tenant_id", "tenant_name", "amount", "note", "paid_at"])
     for p in base_q.order_by(Payment.paid_at.desc()).all():
-        cw.writerow([p.id, p.tenant_id, p.tenant.name, f"{p.amount:.2f}", p.note or "", p.paid_at.isoformat()])
+        cw.writerow(
+            [
+                p.id,
+                p.tenant_id,
+                p.tenant.name,
+                f"{p.amount:.2f}",
+                p.note or "",
+                p.paid_at.isoformat(),
+            ]
+        )
     return make_csv_response(si.getvalue(), "payments_export.csv")
 
 
@@ -1036,6 +1311,7 @@ def server_error(e):
 # CLI COMMANDS
 # -----------------------
 
+
 @app.cli.command("create-admin")
 def create_admin():
     """Create an admin user (manual, production-safe)."""
@@ -1090,10 +1366,10 @@ def update_monthly_rent_cli():
             raise e
 
 
-
 # -----------------------
 # Compatibility / Aliases
 # -----------------------
+
 
 @app.route("/add_tenant")
 @login_required
@@ -1131,10 +1407,9 @@ try:
 except ImportError as e:
     app.logger.warning("Failed to import landlord_settings: %s", e)
 
-
-# -----------------------
-# Run App (LOCAL DEV ONLY)
-# -----------------------
+    # -----------------------
+    # Run App (LOCAL DEV ONLY)
+    # -----------------------
     import logging
     import os
 
@@ -1148,5 +1423,3 @@ except ImportError as e:
         "🚀 Rentana Flask app starting on port %s...",
         os.getenv("PORT", 5000),
     )
-
-    

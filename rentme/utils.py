@@ -1,4 +1,4 @@
-#rentme/utils.py
+# rentme/utils.py
 """
 Notifications & utilities module
 
@@ -17,13 +17,13 @@ import logging
 import smtplib
 from email.mime.text import MIMEText
 from typing import Optional
-
-from flask import current_app
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from typing import Optional
 from flask import current_app
-import logging
+import requests
 
+
+log = logging.getLogger(__name__)
 
 
 log = logging.getLogger(__name__)
@@ -43,23 +43,13 @@ def _mask_secret(s: Optional[str], keep: int = 4) -> str:
 
 
 # ---------------------------------------------------------------------
-# Email sending 
+# Email sending
 # ---------------------------------------------------------------------
 def send_reset_email(
-    to_email: str,
-    token: str,
-    subject: Optional[str] = None,
-    body: Optional[str] = None
+    to_email: str, token: str, subject: Optional[str] = None, body: Optional[str] = None
 ) -> bool:
-    """
-    Send password reset email using mail-api.dev with debug logs
-    """
 
-    if not current_app:
-        log.error("Flask current_app not available")
-        return False
-
-    api_key = current_app.config.get("MAIL_API_KEY")
+    api_key = current_app.config.get("MAILAPI_KEY")
     email_from = current_app.config.get("EMAIL_FROM")
     base_url = current_app.config.get("BASE_URL", "").rstrip("/")
 
@@ -69,50 +59,44 @@ def send_reset_email(
 
     reset_link = f"{base_url}/reset_password/{token}"
 
-    subject = subject or "Password Reset"
-    body = body or f"""Hello,
+    if not subject:
+        subject = "Password Reset"
+
+    if not body:
+        body = f"""Hello,
 
 You requested a password reset.
 
-Click the link below to reset your password:
+Reset your password using the link below:
 {reset_link}
 
 This link expires in 1 hour.
 
-If you didn’t request this, ignore this email.
-
-— RentMe Team
+— Rentana Team
 """
 
     try:
-        response = requests.post(
-            "https://mail-api.dev/api/send",
+        res = requests.post(
+            "https://api.mailapi.dev/send",
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
-            json={
-                "from": email_from,
-                "to": to_email,
-                "subject": subject,
-                "text": body,
-            },
+            json={"from": email_from, "to": to_email, "subject": subject, "text": body},
             timeout=10,
         )
 
-        # DEBUG: print response for troubleshooting
-        print(f"[DEBUG] status_code: {response.status_code}, response_text: {response.text}")
-
-        if response.status_code in (200, 202):
+        if res.status_code in (200, 202):
             log.info("Password reset email sent to %s", to_email)
             return True
 
-        log.error("Mail API error %s: %s", response.status_code, response.text)
+        log.error("MailAPI failed: %s %s", res.status_code, res.text)
         return False
 
     except Exception as e:
-        log.exception("Mail API exception: %s", e)
+        log.exception("MailAPI exception: %s", e)
         return False
+
 
 # ---------------------------------------------------------------------
 # Africa's Talking SMS (safe import inside function)
@@ -153,7 +137,9 @@ def send_sms_via_africastalking(phone_number: str, message: str) -> bool:
         log.info("Africa's Talking SMS response: %s", response)
         return True
     except Exception as e:
-        log.exception("Failed to send SMS via Africa's Talking to %s: %s", phone_number, e)
+        log.exception(
+            "Failed to send SMS via Africa's Talking to %s: %s", phone_number, e
+        )
         return False
 
 
@@ -225,7 +211,7 @@ def normalize_msisdn(phone: Optional[str]) -> str:
     # Long numbers containing Kenyan MSISDN (e.g. 00254712345678)
     elif "2547" in s:
         idx = s.find("2547")
-        s = s[idx:idx + 12]
+        s = s[idx : idx + 12]
 
     else:
         return ""
@@ -235,6 +221,7 @@ def normalize_msisdn(phone: Optional[str]) -> str:
         return ""
 
     return s
+
 
 # ---------------------------------------------------------------------
 # Token generation and verification (password reset)

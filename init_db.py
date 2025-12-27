@@ -26,7 +26,7 @@ with app.app_context():
             login_phone="0712345678",
             password_hash=generate_password_hash(ADMIN_PASSWORD),
             is_admin=True,
-            created_at=datetime.utcnow()
+            created_at=datetime.utcnow(),
         )
         db.session.add(admin)
         db.session.commit()

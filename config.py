@@ -59,20 +59,17 @@ class Config:
     # Callback
     CALLBACK_BASE = os.environ.get("CALLBACK_BASE")
 
-
-    #secure Cookies
-    SESSION_COOKIE_SECURE = True            # HTTPS only
-    SESSION_COOKIE_HTTPONLY = True          # JS cannot access
-    SESSION_COOKIE_SAMESITE = 'Lax'
+    # secure Cookies
+    SESSION_COOKIE_SECURE = True  # HTTPS only
+    SESSION_COOKIE_HTTPONLY = True  # JS cannot access
+    SESSION_COOKIE_SAMESITE = "Lax"
     REMEMBER_COOKIE_SECURE = True
     REMEMBER_COOKIE_HTTPONLY = True
-
 
     WTF_CSRF_ENABLED = True
     WTF_CSRF_TIME_LIMIT = 3600
 
     csrf = CSRFProtect(app)
-
 
     # Derived Values
     @property
@@ -94,18 +91,12 @@ class Config:
     @property
     def MPESA_SHORTCODE(self):
         return (
-            self.LIVE_SHORTCODE
-            if self.MPESA_ENV == "live"
-            else self.SANDBOX_SHORTCODE
+            self.LIVE_SHORTCODE if self.MPESA_ENV == "live" else self.SANDBOX_SHORTCODE
         )
 
     @property
     def MPESA_PASSKEY(self):
-        return (
-            self.LIVE_PASSKEY
-            if self.MPESA_ENV == "live"
-            else self.SANDBOX_PASSKEY
-        )
+        return self.LIVE_PASSKEY if self.MPESA_ENV == "live" else self.SANDBOX_PASSKEY
 
     @property
     def MPESA_CALLBACK_URL(self):

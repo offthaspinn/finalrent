@@ -1,9 +1,9 @@
 {% for tenant in tenants %}
 <tr>
-  <td data-text="{{ tenant.name }}">{{ tenant.name }}</td>
-  <td data-text="{{ tenant.phone }}">{{ tenant.phone }}</td>
+  <td>{{ tenant.name }}</td>
+  <td>{{ tenant.phone }}</td>
   <td>{{ tenant.national_id or '-' }}</td>
-  <td data-text="{{ tenant.house_no }}">{{ tenant.house_no }}</td>
+  <td>{{ tenant.house_no }}</td>
   <td>{{ "%.2f"|format(tenant.monthly_rent or 0) }}</td>
   <td>{{ "%.2f"|format(tenant.total_paid()) }}</td>
 

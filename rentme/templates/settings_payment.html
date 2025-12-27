@@ -2,13 +2,9 @@
 
 {% block content %}
 <div class="container mt-5">
+    <h2>Payment & API Settings</h2>
+    <hr>
 
-    <h2 class="mb-1">M-Pesa & Payment Settings</h2>
-    <p class="text-muted">
-        Per-landlord M-Pesa credentials and receiving numbers. These values override global config when present.
-    </p>
-
-    <!-- Flash messages -->
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
         {% for category, msg in messages %}
@@ -20,169 +16,131 @@
       {% endif %}
     {% endwith %}
 
+    <form method="POST" class="mt-3" autocomplete="off" autocapitalize="off" spellcheck="false" novalidate>
+        {{ form.hidden_tag() }}
 
-    <form id="mpesaForm" method="POST" autocomplete="off" autocapitalize="off" spellcheck="false" novalidate action="{{ url_for('landlord_settings.settings_payment') }}">
-    {{ form.hidden_tag() }}
-
-    <div class="row g-3">
-        <!-- Payment Method & Numbers -->
-        <div class="col-md-6">
-            {{ form.payment_method.label(class="form-label") }}
-            {{ form.payment_method(class="form-select") }}
-            <div class="form-text">How tenants will send payments.</div>
+        <!-- --------------------------- -->
+        <!-- MPesa / Safaricom Settings -->
+        <!-- --------------------------- -->
+        <h4>MPesa Settings</h4>
+        <div class="mb-3">
+            <label for="payment_method" class="form-label">Payment Method</label>
+            {{ form.payment_method(class="form-control") }}
         </div>
 
-        <div class="col-md-6">
-            {{ form.paybill_number.label(class="form-label") }}
-            {{ form.paybill_number(class="form-control", placeholder="e.g. 123456") }}
+        <div class="mb-3">
+            <label for="paybill_number" class="form-label">Paybill Number</label>
+            {{ form.paybill_number(class="form-control") }}
         </div>
 
-        <div class="col-md-6">
-            {{ form.till_number.label(class="form-label") }}
-            {{ form.till_number(class="form-control", placeholder="e.g. 898989") }}
+        <div class="mb-3">
+            <label for="till_number" class="form-label">Till / BuyGoods Number</label>
+            {{ form.till_number(class="form-control") }}
         </div>
 
-        <div class="col-md-6">
-            {{ form.send_money_number.label(class="form-label") }}
-            {{ form.send_money_number(class="form-control", placeholder="2547XXXXXXXX") }}
+        <div class="mb-3">
+            <label for="send_money_number" class="form-label">Send Money Receiver (phone)</label>
+            {{ form.send_money_number(class="form-control") }}
         </div>
 
-        <div class="col-md-6">
-            {{ form.phone_number.label(class="form-label") }}
-            {{ form.phone_number(class="form-control", placeholder="Optional number visible to tenants") }}
+        <div class="mb-3">
+            <label for="phone_number" class="form-label">Display Phone (optional)</label>
+            {{ form.phone_number(class="form-control") }}
         </div>
 
-        <div class="col-12"><hr></div>
-
-        <!-- Sensitive M-Pesa Credentials -->
-        <div class="col-md-6">
-            {{ form.mpesa_consumer_key.label(class="form-label") }}
+        <div class="mb-3">
+            <label for="mpesa_consumer_key" class="form-label">Daraja: Consumer Key</label>
             {{ form.mpesa_consumer_key(class="form-control") }}
         </div>
 
-        <div class="col-md-6">
-            {{ form.mpesa_consumer_secret.label(class="form-label") }}
+        <div class="mb-3">
+            <label for="mpesa_consumer_secret" class="form-label">Daraja: Consumer Secret</label>
             {{ form.mpesa_consumer_secret(class="form-control") }}
-            <div class="mt-2 d-flex gap-2 flex-wrap">
-                <button type="button" class="btn btn-sm btn-outline-secondary" id="toggleSecret">Show</button>
-                <button type="button" class="btn btn-sm btn-outline-secondary" id="copySecret">Copy</button>
-            </div>
         </div>
 
-        <div class="col-md-6">
-            {{ form.mpesa_shortcode.label(class="form-label") }}
+        <div class="mb-3">
+            <label for="mpesa_shortcode" class="form-label">BusinessShortCode / Shortcode</label>
             {{ form.mpesa_shortcode(class="form-control") }}
         </div>
 
-        <div class="col-md-6">
-            {{ form.mpesa_passkey.label(class="form-label") }}
+        <div class="mb-3">
+            <label for="mpesa_passkey" class="form-label">Daraja: Passkey</label>
             {{ form.mpesa_passkey(class="form-control") }}
-            <div class="mt-2 d-flex gap-2 flex-wrap">
-                <button type="button" class="btn btn-sm btn-outline-secondary" id="togglePasskey">Show</button>
-                <button type="button" class="btn btn-sm btn-outline-secondary" id="copyPasskey">Copy</button>
-            </div>
         </div>
 
-        <div class="col-md-6">
-            {{ form.mpesa_mode.label(class="form-label") }}
-            {{ form.mpesa_mode(class="form-select") }}
+        <div class="mb-3">
+            <label for="mpesa_mode" class="form-label">Daraja Mode</label>
+            {{ form.mpesa_mode(class="form-control") }}
         </div>
 
-        <div class="col-md-6">
-            {{ form.callback_url.label(class="form-label") }}
+        <div class="mb-3">
+            <label for="callback_url" class="form-label">Callback URL (optional)</label>
             {{ form.callback_url(class="form-control") }}
-            <div class="form-text">Used as Daraja callback URL for STK and confirmations.</div>
         </div>
-    </div>
 
-    <!-- Bottom Buttons (Safe Layout) -->
-     <div class="mt-4 mb-5 d-flex flex-wrap gap-3 align-items-center">
-    {{ form.submit(class="btn btn-primary") }}
+        <button type="button" class="btn btn-secondary mb-3" id="test-mpesa-btn">
+            Test MPesa Credentials
+        </button>
 
-    <button
-        type="button"
-        id="testAuth"
-        class="btn btn-outline-secondary"
-    >
-        Test Credentials
-    </button>
+        <hr>
 
-    <div id="formFeedback" class="ms-3 small flex-grow-1"></div>
+        <!-- --------------------------- -->
+        <!-- KCB Settings -->
+        <!-- --------------------------- -->
+        <h4>KCB Paybill Settings</h4>
+
+        <div class="mb-3">
+            <label for="kcb_paybill" class="form-label">KCB Paybill</label>
+            {{ form.kcb_paybill(class="form-control") }}
+        </div>
+
+        <div class="mb-3">
+            <label for="kcb_api_key" class="form-label">KCB API Key</label>
+            {{ form.kcb_api_key(class="form-control") }}
+        </div>
+
+        <div class="mb-3">
+            <label for="kcb_callback_url" class="form-label">KCB Callback URL</label>
+            {{ form.kcb_callback_url(class="form-control") }}
+        </div>
+
+        <div class="mb-3">
+            <label for="kcb_env" class="form-label">KCB Environment</label>
+            {{ form.kcb_env(class="form-control") }}
+        </div>
+
+        <button type="button" class="btn btn-secondary mb-3" id="test-kcb-btn">
+            Test KCB Credentials
+        </button>
+
+        <hr>
+
+        <button type="submit" class="btn btn-primary">{{ form.submit.label.text }}</button>
+    </form>
 </div>
 
-  
-</form>
-
-</div>
-
+<!-- --------------------------- -->
+<!-- JS for Testing Credentials -->
+<!-- --------------------------- -->
 <script>
-/* ------- Toggle & Copy Buttons ------- */
-function toggleField(btnId, inputId) {
-    const btn = document.getElementById(btnId);
-    const inp = document.getElementById(inputId);
-    btn.addEventListener('click', () => {
-        inp.type = inp.type === 'password' ? 'text' : 'password';
-        btn.textContent = inp.type === 'password' ? 'Show' : 'Hide';
-    });
-}
-
-function copyField(btnId, inputId) {
-    const btn = document.getElementById(btnId);
-    const inp = document.getElementById(inputId);
-    btn.addEventListener('click', async () => {
-        if (!inp.value) return; // only copy if value exists
-        await navigator.clipboard.writeText(inp.value);
-        btn.textContent = "Copied";
-        setTimeout(()=> btn.textContent = "Copy", 1000);
-    });
-}
-
-toggleField("toggleSecret", "mpesa_consumer_secret");
-toggleField("togglePasskey", "mpesa_passkey");
-copyField("copySecret", "mpesa_consumer_secret");
-copyField("copyPasskey", "mpesa_passkey");
-
-/* ------- Test Credentials (server-side only secrets) ------- */
-document.getElementById("testAuth")?.addEventListener("click", async () => {
-    const fb = document.getElementById("formFeedback");
-    fb.innerHTML = "Testing…";
-
-    const shortcode = document.getElementById("mpesa_shortcode").value.trim();
-    const mode = document.getElementById("mpesa_mode").value;
-
-    if (!shortcode) {
-        fb.innerHTML = '<span class="text-danger fw-bold">Please fill the shortcode field</span>';
-        return;
-    }
-
-    try {
-        const resp = await fetch("{{ url_for('landlord_settings.test_mpesa') }}", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "X-CSRFToken": "{{ csrf_token() }}"
-            },
-            body: JSON.stringify({ shortcode, mode }) // no secrets sent
-        });
-
-        const json = await resp.json();
-        fb.innerHTML = json.ok
-            ? '<span class="text-success fw-bold">✔ Credentials valid</span>'
-            : '<span class="text-danger fw-bold">✖ ' + (json.msg || 'Invalid') + '</span>';
-    } catch (e) {
-        console.error(e);
-        fb.innerHTML = '<span class="text-danger fw-bold">Request failed</span>';
-    }
+document.getElementById("test-mpesa-btn").addEventListener("click", async () => {
+  const resp = await fetch("{{ url_for('landlord_settings.test_payment') }}", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider: "mpesa" })
+  });
+  const data = await resp.json();
+  alert(data.msg || "MPesa test finished.");
 });
 
-/* ------- Client validation on submit ------- */
-document.getElementById("mpesaForm")?.addEventListener("submit", (e) => {
-    const sc = document.getElementById("mpesa_shortcode");
-    if (sc.value && !/^[0-9\-]+$/.test(sc.value)) {
-        e.preventDefault();
-        alert("Shortcode must be numeric.");
-        sc.focus();
-    }
+document.getElementById("test-kcb-btn").addEventListener("click", async () => {
+  const resp = await fetch("{{ url_for('landlord_settings.test_payment') }}", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider: "kcb" })
+  });
+  const data = await resp.json();
+  alert(data.msg || "KCB test finished.");
 });
 </script>
 {% endblock %}
