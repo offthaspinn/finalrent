@@ -141,7 +141,8 @@ csrf.exempt(intasend_bp)
 
 login_manager = LoginManager()
 login_manager.init_app(app)
-
+login_manager.login_view = "login"
+login_manager.login_message_category = "warning"
 
 
 @login_manager.user_loader
@@ -390,50 +391,49 @@ def login():
 # ======================================================
 @app.before_request
 def enforce_property_and_subscription():
-    if not current_user.is_authenticated:
+    endpoint = request.endpoint or ""
+
+    # -----------------------------
+    # 1️⃣ Always allow public routes
+    # -----------------------------
+    if (
+        endpoint.startswith("static")
+        or endpoint in {"login", "logout", "home"}
+        or endpoint.startswith("subscriptions.")
+        or endpoint.startswith("intasend.")
+    ):
         return
 
-    endpoint = request.endpoint or ""
-    endpoint_name = endpoint.split(".")[-1] if endpoint else ""
+    # -----------------------------
+    # 2️⃣ Require authentication
+    # -----------------------------
+    if not current_user.is_authenticated:
+        return redirect(url_for("login"))
 
-    current_app.logger.debug(
-        "before_request endpoint=%s endpoint_name=%s method=%s session=%s",
-        endpoint, endpoint_name, request.method, dict(session),
-    )
+    # -----------------------------
+    # 3️⃣ Require active subscription
+    # -----------------------------
+    if not current_user.has_active_subscription():
+        return redirect(url_for("subscriptions.list_plans"))
 
-    ALLOWED_ENDPOINTS = {
-        "static",
-        "login",
-        "logout",
+    # -----------------------------
+    # 4️⃣ Require active property
+    # -----------------------------
+    PROPERTY_ALLOWED = {
         "select_property",
         "activate_property",
         "create_property",
-        "subscriptions.list_plans",
-        "subscriptions.pay_plan",
-        "subscriptions.payment_status",
         "profile",
     }
 
-    # Allow any subscriptions.* endpoint
-    if endpoint.startswith("subscriptions."):
-        return
+    if "active_property_id" not in session:
+        if endpoint not in PROPERTY_ALLOWED:
+            return redirect(url_for("select_property"))
 
-    # Allow POSTs to reach their handlers (prevents redirects from preempting form submissions)
-    if request.method == "POST":
-        return
-
-    # If user has no active subscription, redirect to plans unless endpoint is allowed
-    if not current_user.has_active_subscription():
-        if endpoint not in ALLOWED_ENDPOINTS and endpoint_name not in ALLOWED_ENDPOINTS:
-            return redirect(url_for("subscriptions.list_plans"))
-
-    # If user has an active subscription but no active property selected,
-    # redirect to select_property unless endpoint is allowed
-    if current_user.has_active_subscription():
-        if "active_property_id" not in session:
-            if endpoint not in ALLOWED_ENDPOINTS and endpoint_name not in ALLOWED_ENDPOINTS:
-                return redirect(url_for("select_property"))
-
+    # -----------------------------
+    # 5️⃣ All checks passed
+    # -----------------------------
+    return
 
 # ======================================================
 # 🏠 PROPERTIES
