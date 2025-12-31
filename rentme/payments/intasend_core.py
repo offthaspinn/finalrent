@@ -11,20 +11,15 @@ def create_intasend_payment(
     redirect_url,
     description="Subscription payment",
 ):
-    base_url = current_app.config.get(
-        "INTASEND_BASE_URL",
-        "https://sandbox.intasend.com/api/v1"
-    )
+    base_url = current_app.config["INTASEND_BASE_URL"]
+    public_key = current_app.config["INTASEND_PUBLIC_KEY"]
 
-    public_key = current_app.config.get("INTASEND_PUBLIC_KEY")
-    secret_key = current_app.config.get("INTASEND_SECRET_KEY")
-
-    if not public_key or not secret_key:
-        raise RuntimeError("IntaSend keys not set")
+    if not public_key:
+        raise RuntimeError("IntaSend public key not set")
 
     payload = {
         "public_key": public_key,
-        "amount": amount,
+        "amount": float(amount),
         "currency": "KES",
         "email": email,
         "phone_number": phone,
@@ -36,11 +31,9 @@ def create_intasend_payment(
     response = requests.post(
         f"{base_url}/checkout/",
         json=payload,
-        headers={
-            "X-IntaSend-Secret-Key": secret_key,
-            "Content-Type": "application/json",
-        },
         timeout=30,
     )
 
-    return response.json()
+    data = response.json()
+    current_app.logger.info(f"INTASEND RESPONSE: {data}")
+    return data

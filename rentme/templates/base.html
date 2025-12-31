@@ -228,12 +228,6 @@ button:active {
     <div class="container-fluid">
       <a class="navbar-brand fw-bold" href="{{ url_for('dashboard') }}">🏠 Rentana</a>
 
-<a href="{{ url_for('select_property') }}">
-<button>
-  <span class="text">properties</span>
-</button>
-</a>
-
 
       {% if current_user.is_authenticated %}
   <div class="d-flex align-items-center">
