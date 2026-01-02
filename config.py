@@ -69,6 +69,11 @@ class Config:
     WTF_CSRF_ENABLED = True
     WTF_CSRF_TIME_LIMIT = 3600
 
+    FLW_SECRET_KEY = os.getenv("FLW_SECRET_KEY")
+    FLW_PUBLIC_KEY = os.getenv("FLW_PUBLIC_KEY")
+    FLW_WEBHOOK_SECRET = os.getenv("FLW_WEBHOOK_SECRET")
+    FLW_BASE_URL = os.getenv("FLW_BASE_URL", "https://api.flutterwave.com/v3")
+
     csrf = CSRFProtect(app)
 
     # Derived Values
@@ -101,3 +106,4 @@ class Config:
     @property
     def MPESA_CALLBACK_URL(self):
         return f"{self.CALLBACK_BASE}/stkpush"
+

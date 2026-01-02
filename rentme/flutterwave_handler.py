@@ -147,7 +147,7 @@ def verify_flw_signature(body_bytes, header_signature, secret):
     return hmac.compare_digest(computed, header_signature)
 
 
-@flutterwave_bp.route("/flutterwave/webhook", methods=["POST"])
+@bp.route("/flutterwave/webhook", methods=["POST"])
 def flutterwave_webhook():
     """
     Single webhook endpoint to handle Flutterwave events.

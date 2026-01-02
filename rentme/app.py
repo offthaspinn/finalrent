@@ -394,13 +394,23 @@ def enforce_property_and_subscription():
     endpoint = request.endpoint or ""
 
     # -----------------------------
-    # 1️⃣ Always allow public routes
+    # 1️⃣ Public routes (ALWAYS allowed)
     # -----------------------------
+    PUBLIC_ENDPOINTS = {
+        "login",
+        "logout",
+        "register",
+        "forgot_password",
+        "reset_password",
+        "verify_email",
+        "home",
+    }
+
     if (
         endpoint.startswith("static")
-        or endpoint in {"login", "logout", "home"}
         or endpoint.startswith("subscriptions.")
         or endpoint.startswith("intasend.")
+        or endpoint in PUBLIC_ENDPOINTS
     ):
         return
 
@@ -417,7 +427,7 @@ def enforce_property_and_subscription():
         return redirect(url_for("subscriptions.list_plans"))
 
     # -----------------------------
-    # 4️⃣ Require active property
+    # 4️⃣ Property selection rules
     # -----------------------------
     PROPERTY_ALLOWED = {
         "select_property",
@@ -431,10 +441,9 @@ def enforce_property_and_subscription():
             return redirect(url_for("select_property"))
 
     # -----------------------------
-    # 5️⃣ All checks passed
+    # 5️⃣ Access granted
     # -----------------------------
     return
-
 # ======================================================
 # 🏠 PROPERTIES
 # ======================================================
