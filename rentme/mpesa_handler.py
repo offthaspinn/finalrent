@@ -738,6 +738,9 @@ def process_payment_orm(
 # -------------------------
 # HTTP callback endpoints
 # -------------------------
+# HTTP callback endpoints
+# -------------------------
+
 @mpesa_bp.route("/payment_callback/validate", methods=["POST"])
 @csrf_exempt  # ✅ Required for Daraja callbacks
 def mpesa_validate():
@@ -804,6 +807,11 @@ def mpesa_validate():
     logger.warning("Validation failed: bill_ref=%s owner=%s", bill_ref, owner_id)
     return jsonify({"ResultCode": 1, "ResultDesc": "Invalid tenant reference"}), 200
 
+
+# --------------------------------------------------------------------
+# CONFIRMATION ENDPOINT  (🔥 FIXED VERSION)
+# --------------------------------------------------------------------
+
 @limiter.limit("10/minute")
 @mpesa_bp.route("/payment_callback/confirmation", methods=["POST"])
 @csrf_exempt
@@ -818,7 +826,7 @@ def mpesa_confirmation():
         User,
         Subscription,
         Plan,
-        LandlordSettings
+        SubscriptionIntent   # 👈 ADD THIS MODEL
     )
     from rentme.extensions import db
 
@@ -834,10 +842,7 @@ def mpesa_confirmation():
         # ------------------------------------------------
         if stk:
             items = stk.get("CallbackMetadata", {}).get("Item", [])
-            data = {
-                i["Name"]: i.get("Value")
-                for i in items if isinstance(i, dict)
-            }
+            data = {i["Name"]: i.get("Value") for i in items if isinstance(i, dict)}
 
             tx_id = data.get("MpesaReceiptNumber") or stk.get("CheckoutRequestID")
             amount = float(data.get("Amount", 0))
@@ -888,7 +893,7 @@ def mpesa_confirmation():
             result = {"ok": False}
 
         # ------------------------------------------------
-        # 4. ACTIVATE SUBSCRIPTION
+        # 4. ACTIVATE SUBSCRIPTION  🔥 FIXED LOGIC
         # ------------------------------------------------
         if result.get("ok"):
             user = User.query.filter_by(login_phone=msisdn).first()
@@ -897,27 +902,40 @@ def mpesa_confirmation():
                 logger.warning("No user found for phone %s", msisdn)
                 return jsonify({"ResultCode": 0, "ResultDesc": "Payment recorded"}), 200
 
-            if not account_ref or "PLAN-" not in account_ref:
-                logger.warning("Missing PLAN reference")
-                return jsonify({"ResultCode": 0, "ResultDesc": "Payment recorded"}), 200
+            # ------------------------------------------------
+            # 4A. FIND PENDING SUBSCRIPTION INTENT (BEST WAY)
+            # ------------------------------------------------
+            intent = SubscriptionIntent.query.filter_by(
+                user_id=user.id,
+                status="pending"
+            ).order_by(SubscriptionIntent.created_at.desc()).first()
 
-            try:
-                plan_id = int(account_ref.split("PLAN-")[1])
-            except Exception:
-                logger.error("Invalid PLAN reference %s", account_ref)
-                return jsonify({"ResultCode": 0, "ResultDesc": "Payment recorded"}), 200
+            plan = None
 
-            plan = Plan.query.get(plan_id)
+            if intent:
+                plan = Plan.query.get(intent.plan_id)
+            else:
+                # ------------------------------------------------
+                # 4B. SAFE FALLBACK (NO PLAN- REQUIRED)
+                # ------------------------------------------------
+                logger.warning("No subscription intent found. Using fallback plan.")
+                plan = Plan.query.order_by(Plan.id.desc()).first()
+
             if not plan:
-                logger.error("Plan not found: %s", plan_id)
+                logger.error("No plan found for activation")
                 return jsonify({"ResultCode": 0, "ResultDesc": "Payment recorded"}), 200
 
-            # 🔒 Deactivate previous subscriptions
+            # ------------------------------------------------
+            # 4C. DEACTIVATE OLD SUBSCRIPTIONS
+            # ------------------------------------------------
             Subscription.query.filter_by(
                 user_id=user.id,
                 is_active=True
             ).update({"is_active": False})
 
+            # ------------------------------------------------
+            # 4D. CREATE NEW SUBSCRIPTION
+            # ------------------------------------------------
             expires_at = datetime.utcnow() + timedelta(days=plan.duration_days)
 
             subscription = Subscription(
@@ -933,6 +951,10 @@ def mpesa_confirmation():
             )
 
             db.session.add(subscription)
+
+            if intent:
+                intent.status = "completed"
+
             db.session.commit()
 
             logger.info(

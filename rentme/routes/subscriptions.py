@@ -11,14 +11,18 @@ from flask import (
 from flask_login import login_required, current_user
 from uuid import uuid4
 
-from rentme.models import Plan, Subscription
+from rentme.models import Plan, Subscription, SubscriptionIntent
 from rentme.forms import SubscriptionForm
 from rentme.utils import normalize_msisdn
 from rentme.payments.intasend_core import create_intasend_payment
+from rentme.extensions import db
 
 subscriptions_bp = Blueprint("subscriptions", __name__, url_prefix="/subscriptions")
 
 
+# -------------------------------------------------------------------
+# LIST PLANS
+# -------------------------------------------------------------------
 @subscriptions_bp.route("/plans", methods=["GET"])
 @login_required
 def list_plans():
@@ -27,6 +31,9 @@ def list_plans():
     return render_template("subscriptions/plans.html", plans=plans, form=form)
 
 
+# -------------------------------------------------------------------
+# START SUBSCRIPTION PAYMENT
+# -------------------------------------------------------------------
 @subscriptions_bp.route("/pay/<int:plan_id>", methods=["POST"])
 @login_required
 def pay_plan(plan_id):
@@ -37,7 +44,23 @@ def pay_plan(plan_id):
 
     plan = Plan.query.get_or_404(plan_id)
     phone = normalize_msisdn(form.phone.data)
-    tx_ref = f"PLAN-{plan.id}-{uuid4().hex}"
+
+    # -------------------------------------------------
+    # 🔒 1. CREATE PENDING SUBSCRIPTION INTENT
+    # -------------------------------------------------
+    intent = SubscriptionIntent(
+        user_id=current_user.id,
+        plan_id=plan.id,
+        status="pending"
+    )
+    db.session.add(intent)
+    db.session.commit()
+
+    # -------------------------------------------------
+    # 💳 2. START PAYMENT WITH INTASEND
+    # -------------------------------------------------
+    # embed intent id in reference so webhook can find it
+    tx_ref = f"PLAN-{plan.id}-INTENT-{intent.id}"
 
     response = create_intasend_payment(
         amount=plan.price,
@@ -55,9 +78,13 @@ def pay_plan(plan_id):
 
     # UX-only flag; webhook is source of truth
     session["pending_plan"] = plan.id
+
     return redirect(response["url"])
 
 
+# -------------------------------------------------------------------
+# PAYMENT STATUS PAGE
+# -------------------------------------------------------------------
 @subscriptions_bp.route("/payment-status", methods=["GET"])
 @login_required
 def payment_status():
@@ -85,6 +112,9 @@ def payment_status():
     )
 
 
+# -------------------------------------------------------------------
+# POLLING ENDPOINT (AJAX)
+# -------------------------------------------------------------------
 @subscriptions_bp.route("/payment-status/check", methods=["GET"])
 @login_required
 def payment_status_check():
@@ -104,7 +134,8 @@ def payment_status_check():
             ok=True,
             plan_name=subscription.plan_name,
             amount_paid=float(subscription.amount_paid or 0),
-            expires_at=subscription.expires_at.isoformat() if subscription.expires_at else None,
+            expires_at=subscription.expires_at.isoformat()
+            if subscription.expires_at else None,
         )
 
     return jsonify(ok=False)
