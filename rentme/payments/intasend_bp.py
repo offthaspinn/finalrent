@@ -9,7 +9,7 @@ from rentme.models import (
     User
 )
 
-intasend_bp = Blueprint("intasend_bp", _name_, url_prefix="/webhook")
+intasend_bp = Blueprint("intasend", __name__, url_prefix="/intasend")
 
 
 # ============================================================
