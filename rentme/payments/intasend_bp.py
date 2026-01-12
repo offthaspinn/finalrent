@@ -1,132 +1,129 @@
 from flask import Blueprint, request, jsonify, current_app
 from datetime import datetime, timedelta
-import requests
+from sqlalchemy.exc import SQLAlchemyError
 
 from rentme.extensions import db
-from rentme.models import User, Subscription, Plan
+from rentme.models import (
+    SubscriptionIntent,
+    Subscription,
+    User
+)
 
-intasend_bp = Blueprint("intasend", __name__, url_prefix="/intasend")
-
-
-def verify_intasend_transaction(invoice_id: str) -> dict | None:
-    """
-    Verify IntaSend payment by querying IntaSend API.
-    This is REQUIRED because your account uses UNSIGNED webhooks.
-    """
-    base_url = current_app.config.get("INTASEND_BASE_URL")
-    secret_key = current_app.config.get("INTASEND_SECRET_KEY")
-
-    if not base_url or not secret_key:
-        current_app.logger.error("IntaSend config missing")
-        return None
-
-    headers = {
-        "Authorization": f"Bearer {secret_key}",
-        "Content-Type": "application/json",
-    }
-
-    try:
-        resp = requests.get(
-            f"{base_url}/payment/status/",
-            params={"invoice_id": invoice_id},
-            headers=headers,
-            timeout=20,
-        )
-    except Exception as e:
-        current_app.logger.exception("IntaSend verification request failed")
-        return None
-
-    if resp.status_code != 200:
-        current_app.logger.error(
-            "IntaSend verification failed: %s", resp.text
-        )
-        return None
-
-    data = resp.json()
-
-    if data.get("state") != "COMPLETE":
-        return None
-
-    return data
+intasend_bp = Blueprint("intasend_bp", _name_, url_prefix="/webhook")
 
 
-@intasend_bp.route("/webhook", methods=["POST"])
+# ============================================================
+# IntaSend Webhook
+# ============================================================
+@intasend_bp.route("/intasend", methods=["POST"])
 def intasend_webhook():
     """
-    IntaSend Collection Webhook (UNSIGNED)
-    Security is enforced by server-to-server verification.
+    IntaSend M-Pesa webhook handler
+
+    FINAL, AUTHORITATIVE FLOW:
+    subscription_intents (pending)
+        ↓
+    IntaSend payment COMPLETE
+        ↓
+    subscription created
+        ↓
+    intent marked completed
     """
-    payload = request.get_json(silent=True) or {}
+
+    payload = request.get_json(silent=True)
+
+    if not payload:
+        current_app.logger.error("IntaSend webhook: empty payload")
+        return jsonify({"ok": False, "error": "empty_payload"}), 400
+
+    # --------------------------------------------------------
+    # 1. Validate payment state
+    # --------------------------------------------------------
+    payment_state = payload.get("state")
+    if payment_state != "COMPLETE":
+        # Ignore non-complete payments safely
+        return jsonify({"ok": True, "ignored": True}), 200
 
     invoice_id = payload.get("invoice_id")
+    mpesa_reference = payload.get("mpesa_reference")
+    amount = payload.get("amount")
+
     if not invoice_id:
-        return jsonify({"ok": False}), 200
+        current_app.logger.error("IntaSend webhook: missing invoice_id")
+        return jsonify({"ok": False, "error": "missing_invoice_id"}), 400
 
-    # ------------------------------------------------
-    # 🔐 VERIFY PAYMENT VIA INTASEND API (SOURCE OF TRUTH)
-    # ------------------------------------------------
-    verified = verify_intasend_transaction(invoice_id)
-    if not verified:
-        return jsonify({"ok": False}), 200
+    # --------------------------------------------------------
+    # 2. Load subscription intent
+    # --------------------------------------------------------
+    intent = SubscriptionIntent.query.filter_by(
+        invoice_id=invoice_id
+    ).with_for_update().first()
 
-    api_ref = verified.get("api_ref")
-    amount = verified.get("amount")
-    email = verified.get("email")
+    if not intent:
+        current_app.logger.error(
+            f"IntaSend webhook: intent not found for invoice_id={invoice_id}"
+        )
+        # Return 200 to prevent IntaSend retries
+        return jsonify({"ok": True, "intent": "not_found"}), 200
 
-    # ------------------------------------------------
-    # Accept only subscription payments
-    # ------------------------------------------------
-    if not api_ref or "PLAN-" not in api_ref:
-        return jsonify({"ok": False}), 200
+    # --------------------------------------------------------
+    # 3. Idempotency protection
+    # --------------------------------------------------------
+    if intent.status == "completed":
+        return jsonify({"ok": True, "already_processed": True}), 200
 
-    user = User.query.filter_by(email=email).first()
+    # --------------------------------------------------------
+    # 4. Validate user exists
+    # --------------------------------------------------------
+    user = User.query.get(intent.user_id)
     if not user:
-        return jsonify({"ok": False}), 200
+        current_app.logger.error(
+            f"IntaSend webhook: user not found (user_id={intent.user_id})"
+        )
+        return jsonify({"ok": False, "error": "user_not_found"}), 500
 
+    # --------------------------------------------------------
+    # 5. Create subscription (ATOMIC)
+    # --------------------------------------------------------
     try:
-        plan_id = int(api_ref.split("PLAN-")[1].split("-")[0])
-    except Exception:
-        return jsonify({"ok": False}), 200
+        # Safety: ensure no duplicate active subscription
+        existing_subscription = Subscription.query.filter_by(
+            user_id=intent.user_id,
+            plan_id=intent.plan_id,
+            is_active=True
+        ).first()
 
-    plan = Plan.query.get(plan_id)
-    if not plan:
-        return jsonify({"ok": False}), 200
+        if not existing_subscription:
+            subscription = Subscription(
+                user_id=intent.user_id,
+                plan_id=intent.plan_id,
+                plan_name=intent.plan_name,
+                properties_allowed=intent.properties_allowed,
+                amount_paid=amount or intent.amount,
+                is_active=True,
+                started_at=datetime.utcnow(),
+                expires_at=datetime.utcnow() + timedelta(days=intent.duration_days)
+            )
+            db.session.add(subscription)
 
-    # ------------------------------------------------
-    # 🔁 IDEMPOTENCY: prevent duplicate subscriptions
-    # ------------------------------------------------
-    existing = Subscription.query.filter_by(
-        user_id=user.id,
-        plan_id=plan.id,
-        is_active=True,
-    ).first()
+        # ----------------------------------------------------
+        # 6. Finalize intent
+        # ----------------------------------------------------
+        intent.status = "completed"
+        intent.completed_at = datetime.utcnow()
+        intent.payment_reference = mpesa_reference
+        intent.amount_paid = amount or intent.amount
 
-    if existing:
-        return jsonify({"ok": True, "reason": "already_active"}), 200
+        db.session.commit()
 
-    # ------------------------------------------------
-    # Deactivate previous subscriptions
-    # ------------------------------------------------
-    Subscription.query.filter_by(
-        user_id=user.id,
-        is_active=True,
-    ).update({"is_active": False})
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        current_app.logger.exception(
+            f"IntaSend webhook DB failure for invoice_id={invoice_id}"
+        )
+        return jsonify({"ok": False, "error": "db_failure"}), 500
 
-    expires_at = datetime.utcnow() + timedelta(days=plan.duration_days)
-
-    subscription = Subscription(
-        user_id=user.id,
-        plan_id=plan.id,
-        plan_name=plan.name,
-        properties_allowed=plan.max_properties,
-        amount_paid=float(amount or 0),
-        is_active=True,
-        created_at=datetime.utcnow(),
-        expires_at=expires_at,
-    )
-
-    db.session.add(subscription)
-    db.session.commit()
-
-    return jsonify({"ok": True}), 200
-
+    # --------------------------------------------------------
+    # 7. Success
+    # --------------------------------------------------------
+    return jsonify({"ok": True, "status": "subscription_activated"}), 200
