@@ -45,28 +45,41 @@ def pay_plan(plan_id):
     plan = Plan.query.get_or_404(plan_id)
     phone = normalize_msisdn(form.phone.data)
 
-    # -------------------------------------------------
-    # 🔒 1. CREATE PENDING SUBSCRIPTION INTENT
-    # -------------------------------------------------
-    intent = SubscriptionIntent(
-        user_id=current_user.id,
-        plan_id=plan.id,
-        status="pending"
-    )
-    db.session.add(intent)
-    db.session.commit()
+    try:
+        # -------------------------------------------------
+        # 1. CREATE INTENT (FLUSH TO GET ID)
+        # -------------------------------------------------
+        intent = SubscriptionIntent(
+            user_id=current_user.id,
+            plan_id=plan.id,
+            status="pending",
+            amount=plan.price,
+        )
+        db.session.add(intent)
+        db.session.flush()  # 👈 generates intent.id WITHOUT committing
+
+        # -------------------------------------------------
+        # 2. GENERATE api_ref (NOW REQUIRED)
+        # -------------------------------------------------
+        api_ref = f"PLAN-{plan.id}-INTENT-{intent.id}"
+        intent.api_ref = api_ref
+
+        db.session.commit()
+
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Failed to create subscription intent")
+        flash("Unable to start payment. Please try again.", "danger")
+        return redirect(url_for("subscriptions.list_plans"))
 
     # -------------------------------------------------
-    # 💳 2. START PAYMENT WITH INTASEND
+    # 3. START PAYMENT WITH INTASEND
     # -------------------------------------------------
-    # embed intent id in reference so webhook can find it
-    tx_ref = f"PLAN-{plan.id}-INTENT-{intent.id}"
-
     response = create_intasend_payment(
         amount=plan.price,
         email=current_user.email,
         phone=phone,
-        tx_ref=tx_ref,
+        tx_ref=api_ref,  # 🔑 MUST MATCH subscription_intents.api_ref
         redirect_url=url_for("subscriptions.payment_status", _external=True),
         description=f"{plan.name} subscription",
     )
@@ -76,12 +89,10 @@ def pay_plan(plan_id):
         flash("Payment initiation failed. Try again.", "danger")
         return redirect(url_for("subscriptions.list_plans"))
 
-    # UX-only flag; webhook is source of truth
+    # UX-only flag (webhook is source of truth)
     session["pending_plan"] = plan.id
 
     return redirect(response["url"])
-
-
 # -------------------------------------------------------------------
 # PAYMENT STATUS PAGE
 # -------------------------------------------------------------------
