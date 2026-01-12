@@ -3,127 +3,121 @@ from datetime import datetime, timedelta
 from sqlalchemy.exc import SQLAlchemyError
 
 from rentme.extensions import db
-from rentme.models import (
-    SubscriptionIntent,
-    Subscription,
-    User
-)
+from rentme.models import SubscriptionIntent, Subscription, User, Plan
 
-intasend_bp = Blueprint("intasend", __name__, url_prefix="/intasend")
+import requests
+
+# ------------------------------------------------------------
+# Blueprint
+# ------------------------------------------------------------
+intasend_bp = Blueprint("intasend", _name_, url_prefix="/intasend")
+
+
+# ------------------------------------------------------------
+# IntaSend verification
+# ------------------------------------------------------------
+def verify_intasend_transaction(invoice_id: str) -> bool:
+    base_url = current_app.config.get("INTASEND_BASE_URL")
+    secret_key = current_app.config.get("INTASEND_SECRET_KEY")
+
+    if not base_url or not secret_key:
+        current_app.logger.error("IntaSend config missing")
+        return False
+
+    try:
+        resp = requests.get(
+            f"{base_url}/payment/status/",
+            params={"invoice_id": invoice_id},
+            headers={"Authorization": f"Bearer {secret_key}"},
+            timeout=20,
+        )
+    except Exception:
+        current_app.logger.exception("IntaSend verification request failed")
+        return False
+
+    if resp.status_code != 200:
+        return False
+
+    data = resp.json()
+    return data.get("state") == "COMPLETE"
 
 
 # ============================================================
 # IntaSend Webhook
 # ============================================================
-@intasend_bp.route("/intasend", methods=["POST"])
+@intasend_bp.route("/webhook", methods=["POST"])
 def intasend_webhook():
-    """
-    IntaSend M-Pesa webhook handler
-
-    FINAL, AUTHORITATIVE FLOW:
-    subscription_intents (pending)
-        ↓
-    IntaSend payment COMPLETE
-        ↓
-    subscription created
-        ↓
-    intent marked completed
-    """
-
     payload = request.get_json(silent=True)
 
     if not payload:
-        current_app.logger.error("IntaSend webhook: empty payload")
         return jsonify({"ok": False, "error": "empty_payload"}), 400
 
-    # --------------------------------------------------------
-    # 1. Validate payment state
-    # --------------------------------------------------------
     payment_state = payload.get("state")
-    if payment_state != "COMPLETE":
-        # Ignore non-complete payments safely
-        return jsonify({"ok": True, "ignored": True}), 200
-
     invoice_id = payload.get("invoice_id")
     mpesa_reference = payload.get("mpesa_reference")
     amount = payload.get("amount")
 
+    if payment_state != "COMPLETE":
+        return jsonify({"ok": True, "ignored": True}), 200
+
     if not invoice_id:
-        current_app.logger.error("IntaSend webhook: missing invoice_id")
-        return jsonify({"ok": False, "error": "missing_invoice_id"}), 400
+        return jsonify({"ok": False, "error": "missing_invoice"}), 400
 
     # --------------------------------------------------------
-    # 2. Load subscription intent
+    # Verify payment with IntaSend
     # --------------------------------------------------------
-    intent = SubscriptionIntent.query.filter_by(
-        invoice_id=invoice_id
-    ).with_for_update().first()
+    if not verify_intasend_transaction(invoice_id):
+        current_app.logger.error(
+            f"Verification failed for invoice {invoice_id}"
+        )
+        return jsonify({"ok": False, "error": "verification_failed"}), 400
+
+    # --------------------------------------------------------
+    # Locate MOST RECENT pending intent
+    # --------------------------------------------------------
+    intent = (
+        SubscriptionIntent.query
+        .filter_by(status="pending")
+        .order_by(SubscriptionIntent.created_at.desc())
+        .with_for_update()
+        .first()
+    )
 
     if not intent:
-        current_app.logger.error(
-            f"IntaSend webhook: intent not found for invoice_id={invoice_id}"
-        )
-        # Return 200 to prevent IntaSend retries
+        current_app.logger.error("No pending SubscriptionIntent found")
         return jsonify({"ok": True, "intent": "not_found"}), 200
 
-    # --------------------------------------------------------
-    # 3. Idempotency protection
-    # --------------------------------------------------------
-    if intent.status == "completed":
-        return jsonify({"ok": True, "already_processed": True}), 200
-
-    # --------------------------------------------------------
-    # 4. Validate user exists
-    # --------------------------------------------------------
     user = User.query.get(intent.user_id)
-    if not user:
-        current_app.logger.error(
-            f"IntaSend webhook: user not found (user_id={intent.user_id})"
-        )
-        return jsonify({"ok": False, "error": "user_not_found"}), 500
+    plan = Plan.query.get(intent.plan_id)
+
+    if not user or not plan:
+        current_app.logger.error("User or Plan missing")
+        return jsonify({"ok": False, "error": "invalid_intent"}), 500
 
     # --------------------------------------------------------
-    # 5. Create subscription (ATOMIC)
+    # Atomic finalize
     # --------------------------------------------------------
     try:
-        # Safety: ensure no duplicate active subscription
-        existing_subscription = Subscription.query.filter_by(
-            user_id=intent.user_id,
-            plan_id=intent.plan_id,
-            is_active=True
-        ).first()
+        subscription = Subscription(
+            user_id=user.id,
+            plan_id=plan.id,
+            plan_name=plan.name,
+            properties_allowed=plan.properties_allowed,
+            amount_paid=amount or plan.price,
+            is_active=True,
+            mpesa_receipt=mpesa_reference,
+            created_at=datetime.utcnow(),
+            expires_at=datetime.utcnow() + timedelta(days=plan.duration_days),
+        )
 
-        if not existing_subscription:
-            subscription = Subscription(
-                user_id=intent.user_id,
-                plan_id=intent.plan_id,
-                plan_name=intent.plan_name,
-                properties_allowed=intent.properties_allowed,
-                amount_paid=amount or intent.amount,
-                is_active=True,
-                started_at=datetime.utcnow(),
-                expires_at=datetime.utcnow() + timedelta(days=intent.duration_days)
-            )
-            db.session.add(subscription)
+        db.session.add(subscription)
 
-        # ----------------------------------------------------
-        # 6. Finalize intent
-        # ----------------------------------------------------
         intent.status = "completed"
-        intent.completed_at = datetime.utcnow()
-        intent.payment_reference = mpesa_reference
-        intent.amount_paid = amount or intent.amount
-
         db.session.commit()
 
-    except SQLAlchemyError as e:
+    except SQLAlchemyError:
         db.session.rollback()
-        current_app.logger.exception(
-            f"IntaSend webhook DB failure for invoice_id={invoice_id}"
-        )
+        current_app.logger.exception("Failed to finalize subscription")
         return jsonify({"ok": False, "error": "db_failure"}), 500
 
-    # --------------------------------------------------------
-    # 7. Success
-    # --------------------------------------------------------
-    return jsonify({"ok": True, "status": "subscription_activated"}), 200
+    return jsonify({"ok": True, "subscription": "activated"}), 200
