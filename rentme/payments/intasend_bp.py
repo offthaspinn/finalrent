@@ -10,7 +10,7 @@ import requests
 # ============================================================
 # Blueprint
 # ============================================================
-intasend_bp = Blueprint("intasend", _name_, url_prefix="/intasend")
+intasend_bp = Blueprint("intasend", __name__, url_prefix="/intasend")
 
 
 # ============================================================
