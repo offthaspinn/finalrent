@@ -3,43 +3,58 @@ from datetime import datetime, timedelta
 from sqlalchemy.exc import SQLAlchemyError
 
 from rentme.extensions import db
-from rentme.models import SubscriptionIntent, Subscription, User, Plan
+from rentme.models import (
+    SubscriptionIntent,
+    Subscription,
+    User,
+    Plan
+)
 
 import requests
 
 # ------------------------------------------------------------
 # Blueprint
 # ------------------------------------------------------------
-intasend_bp = Blueprint("intasend", _name_, url_prefix="/intasend")
+intasend_bp = Blueprint("intasend", __name__, url_prefix="/intasend")
 
 
 # ------------------------------------------------------------
-# IntaSend verification
+# Verify IntaSend payment (UNSIGNED WEBHOOKS REQUIRE THIS)
 # ------------------------------------------------------------
-def verify_intasend_transaction(invoice_id: str) -> bool:
+def verify_intasend_transaction(invoice_id: str) -> dict | None:
     base_url = current_app.config.get("INTASEND_BASE_URL")
     secret_key = current_app.config.get("INTASEND_SECRET_KEY")
 
     if not base_url or not secret_key:
         current_app.logger.error("IntaSend config missing")
-        return False
+        return None
+
+    headers = {
+        "Authorization": f"Bearer {secret_key}",
+        "Content-Type": "application/json",
+    }
 
     try:
         resp = requests.get(
             f"{base_url}/payment/status/",
             params={"invoice_id": invoice_id},
-            headers={"Authorization": f"Bearer {secret_key}"},
+            headers=headers,
             timeout=20,
         )
     except Exception:
         current_app.logger.exception("IntaSend verification request failed")
-        return False
+        return None
 
     if resp.status_code != 200:
-        return False
+        current_app.logger.error("IntaSend verification failed: %s", resp.text)
+        return None
 
     data = resp.json()
-    return data.get("state") == "COMPLETE"
+
+    if data.get("state") != "COMPLETE":
+        return None
+
+    return data
 
 
 # ============================================================
@@ -52,72 +67,97 @@ def intasend_webhook():
     if not payload:
         return jsonify({"ok": False, "error": "empty_payload"}), 400
 
-    payment_state = payload.get("state")
-    invoice_id = payload.get("invoice_id")
-    mpesa_reference = payload.get("mpesa_reference")
-    amount = payload.get("amount")
-
-    if payment_state != "COMPLETE":
+    # --------------------------------------------------------
+    # 1. Extract fields
+    # --------------------------------------------------------
+    if payload.get("state") != "COMPLETE":
         return jsonify({"ok": True, "ignored": True}), 200
 
+    invoice_id = payload.get("invoice_id")
+    mpesa_ref = payload.get("mpesa_reference")
+
     if not invoice_id:
+        current_app.logger.error("Missing invoice_id in webhook")
         return jsonify({"ok": False, "error": "missing_invoice"}), 400
 
     # --------------------------------------------------------
-    # Verify payment with IntaSend
+    # 2. Verify payment with IntaSend
     # --------------------------------------------------------
-    if not verify_intasend_transaction(invoice_id):
-        current_app.logger.error(
-            f"Verification failed for invoice {invoice_id}"
-        )
+    verification = verify_intasend_transaction(invoice_id)
+    if not verification:
         return jsonify({"ok": False, "error": "verification_failed"}), 400
 
     # --------------------------------------------------------
-    # Locate MOST RECENT pending intent
-    # --------------------------------------------------------
-    intent = (
-        SubscriptionIntent.query
-        .filter_by(status="pending")
-        .order_by(SubscriptionIntent.created_at.desc())
-        .with_for_update()
-        .first()
-    )
-
-    if not intent:
-        current_app.logger.error("No pending SubscriptionIntent found")
-        return jsonify({"ok": True, "intent": "not_found"}), 200
-
-    user = User.query.get(intent.user_id)
-    plan = Plan.query.get(intent.plan_id)
-
-    if not user or not plan:
-        current_app.logger.error("User or Plan missing")
-        return jsonify({"ok": False, "error": "invalid_intent"}), 500
-
-    # --------------------------------------------------------
-    # Atomic finalize
+    # 3. Load intent (LOCKED)
     # --------------------------------------------------------
     try:
-        subscription = Subscription(
-            user_id=user.id,
-            plan_id=plan.id,
-            plan_name=plan.name,
-            properties_allowed=plan.properties_allowed,
-            amount_paid=amount or plan.price,
-            is_active=True,
-            mpesa_receipt=mpesa_reference,
-            created_at=datetime.utcnow(),
-            expires_at=datetime.utcnow() + timedelta(days=plan.duration_days),
+        intent = (
+            SubscriptionIntent.query
+            .filter_by(invoice_id=invoice_id)
+            .with_for_update()
+            .first()
         )
 
-        db.session.add(subscription)
+        if not intent:
+            # Payment is real but intent missing → do not retry
+            current_app.logger.error(
+                f"No SubscriptionIntent for invoice_id={invoice_id}"
+            )
+            return jsonify({"ok": True, "intent": "not_found"}), 200
 
+        if intent.status == "completed":
+            return jsonify({"ok": True, "already_processed": True}), 200
+
+        # ----------------------------------------------------
+        # 4. Load user & plan
+        # ----------------------------------------------------
+        user = User.query.get(intent.user_id)
+        plan = Plan.query.get(intent.plan_id)
+
+        if not user or not plan:
+            current_app.logger.error("User or Plan missing")
+            return jsonify({"ok": False, "error": "data_integrity"}), 500
+
+        # ----------------------------------------------------
+        # 5. Prevent duplicate active subscriptions
+        # ----------------------------------------------------
+        existing = Subscription.query.filter_by(
+            user_id=user.id,
+            is_active=True
+        ).first()
+
+        if not existing:
+            subscription = Subscription(
+                user_id=user.id,
+                plan_id=plan.id,
+                plan_name=plan.name,
+                properties_allowed=plan.max_properties,
+                amount_paid=plan.price,
+                is_active=True,
+                mpesa_receipt=mpesa_ref,
+                created_at=datetime.utcnow(),
+                expires_at=datetime.utcnow()
+                + timedelta(days=plan.duration_days)
+            )
+            db.session.add(subscription)
+
+        # ----------------------------------------------------
+        # 6. Finalize intent
+        # ----------------------------------------------------
         intent.status = "completed"
+        intent.completed_at = datetime.utcnow()
+        intent.payment_reference = mpesa_ref
+
         db.session.commit()
 
     except SQLAlchemyError:
         db.session.rollback()
-        current_app.logger.exception("Failed to finalize subscription")
+        current_app.logger.exception(
+            f"Webhook DB failure invoice_id={invoice_id}"
+        )
         return jsonify({"ok": False, "error": "db_failure"}), 500
 
+    # --------------------------------------------------------
+    # 7. Success
+    # --------------------------------------------------------
     return jsonify({"ok": True, "subscription": "activated"}), 200
