@@ -186,31 +186,30 @@ class User(db.Model, UserMixin):
         return f"<User {self.email} | admin={self.is_admin}>"
 
 class SubscriptionIntent(db.Model):
-    __tablename__ = "subscription_intents" # 🔑 CRITICAL
+    __tablename__ = "subscription_intents"
 
     id = db.Column(db.Integer, primary_key=True)
-
     user_id = db.Column(
         db.Integer,
         db.ForeignKey("user.id", ondelete="CASCADE"),
         nullable=False,
     )
-
     plan_id = db.Column(
         db.Integer,
         db.ForeignKey("plan.id", ondelete="RESTRICT"),
         nullable=False,
     )
 
-    status = db.Column(db.String(20), default="pending")
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-    api_ref = db.Column(db.String(100), nullable=False, unique=True)
-    payment_ref = db.Column(db.String(100), unique=True)
-
+    status = db.Column(db.String(20))
     amount = db.Column(db.Numeric(10, 2))
+    api_ref = db.Column(db.String(100), nullable=False, unique=True)
+
+    payment_ref = db.Column(db.String(100), unique=True)
+    payment_reference = db.Column(db.String(100))
+    created_at = db.Column(
+        db.DateTime, server_default=db.func.now()
+    )
     completed_at = db.Column(db.DateTime)
-    payment_reference = db.Column(db.String(100))  
 
 class LandlordSettings(db.Model):
     __tablename__ = "landlord_settings"

@@ -7,22 +7,19 @@ def create_intasend_payment(
     amount,
     email,
     phone,
-    api_ref,
+    invoice_id,
     redirect_url,
     description="Subscription payment",
 ):
-    base_url = current_app.config.get("INTASEND_BASE_URL")
-    secret_key = current_app.config.get("INTASEND_SECRET_KEY")
-
-    if not base_url or not secret_key:
-        raise RuntimeError("IntaSend configuration missing")
+    base_url = current_app.config["INTASEND_BASE_URL"]
+    secret_key = current_app.config["INTASEND_SECRET_KEY"]
 
     payload = {
         "amount": float(amount),
         "currency": "KES",
         "email": email,
         "phone_number": phone,
-        "tx_ref": api_ref,  # ✅ REQUIRED by IntaSend
+        "invoice_id": invoice_id,  # ✅ documented
         "redirect_url": redirect_url,
         "description": description,
     }
@@ -45,17 +42,13 @@ def create_intasend_payment(
         current_app.logger.error(
             f"IntaSend non-JSON response: {response.text}"
         )
-        return {"error": "invalid_response"}
+        return None
 
     current_app.logger.info(
         f"INTASEND RESPONSE [{response.status_code}]: {data}"
     )
 
     if response.status_code not in (200, 201):
-        return {
-            "error": "intasend_failed",
-            "status_code": response.status_code,
-            "details": data,
-        }
+        return None
 
     return data

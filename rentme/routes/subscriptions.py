@@ -32,7 +32,6 @@ def list_plans():
 
 
 # -------------------------------------------------------------------
-
 # START SUBSCRIPTION PAYMENT
 # -------------------------------------------------------------------
 @subscriptions_bp.route("/pay/<int:plan_id>", methods=["POST"])
@@ -48,24 +47,22 @@ def pay_plan(plan_id):
 
     try:
         # -------------------------------------------------
-        # 1. CREATE PENDING SUBSCRIPTION INTENT (NO COMMIT)
+        # 1. CREATE PENDING SUBSCRIPTION INTENT
         # -------------------------------------------------
         intent = SubscriptionIntent(
             user_id=current_user.id,
             plan_id=plan.id,
             status="pending",
+            amount=plan.price,
         )
-
         db.session.add(intent)
         db.session.flush()  # 🔑 generates intent.id safely
 
         # -------------------------------------------------
-        # 2. SET api_ref + amount BEFORE COMMIT (CRITICAL)
+        # 2. INTERNAL REFERENCE (DB + IntaSend invoice_id)
         # -------------------------------------------------
-        api_ref = f"PLAN-{plan.id}-INTENT-{intent.id}"
-
+        api_ref = f"SUBINT-{intent.id}"
         intent.api_ref = api_ref
-        intent.amount = plan.price
 
         db.session.commit()
 
@@ -82,7 +79,7 @@ def pay_plan(plan_id):
         amount=plan.price,
         email=current_user.email,
         phone=phone,
-        tx_ref=api_ref,  # 🔑 MUST MATCH api_ref IN DB
+        invoice_id=api_ref,  # ✅ SUPPORTED FIELD
         redirect_url=url_for(
             "subscriptions.payment_status",
             _external=True
@@ -91,15 +88,11 @@ def pay_plan(plan_id):
     )
 
     if not response or "url" not in response:
-        current_app.logger.error(
-            f"IntaSend payment failed: {response}"
-        )
+        current_app.logger.error(f"IntaSend failed: {response}")
         flash("Unable to start payment. Please try again.", "danger")
         return redirect(url_for("subscriptions.list_plans"))
 
-    # UX-only flag (webhook is source of truth)
     session["pending_plan"] = plan.id
-
     return redirect(response["url"])
 
 # PAYMENT STATUS PAGE
