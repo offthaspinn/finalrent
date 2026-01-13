@@ -22,7 +22,7 @@ def create_intasend_payment(
         "currency": "KES",
         "email": email,
         "phone_number": phone,
-        "api_ref": api_ref,  # 🔑 MUST match subscription_intents.api_ref
+        "tx_ref": api_ref,  # ✅ REQUIRED by IntaSend
         "redirect_url": redirect_url,
         "description": description,
     }
@@ -47,7 +47,9 @@ def create_intasend_payment(
         )
         return {"error": "invalid_response"}
 
-    current_app.logger.info(f"INTASEND RESPONSE [{response.status_code}]: {data}")
+    current_app.logger.info(
+        f"INTASEND RESPONSE [{response.status_code}]: {data}"
+    )
 
     if response.status_code not in (200, 201):
         return {
