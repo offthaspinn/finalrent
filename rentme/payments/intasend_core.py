@@ -7,32 +7,30 @@ def create_intasend_payment(
     amount,
     email,
     phone,
-    invoice_id,
+    api_ref,
     redirect_url,
     description="Subscription payment",
 ):
-    base_url = current_app.config["INTASEND_BASE_URL"]
-    secret_key = current_app.config["INTASEND_SECRET_KEY"]
+    base_url = current_app.config.get("INTASEND_BASE_URL")
+    public_key = current_app.config.get("INTASEND_PUBLIC_KEY")
+
+    if not base_url or not public_key:
+        raise RuntimeError("IntaSend public key missing")
 
     payload = {
+        "public_key": public_key,
         "amount": float(amount),
         "currency": "KES",
         "email": email,
         "phone_number": phone,
-        "invoice_id": invoice_id,  # ✅ documented
+        "api_ref": api_ref,        # stored in DB
         "redirect_url": redirect_url,
         "description": description,
     }
 
-    headers = {
-        "Authorization": f"Bearer {secret_key}",
-        "Content-Type": "application/json",
-    }
-
     response = requests.post(
-        f"{base_url}/payment/mpesa/",
+        f"{base_url}/checkout/",
         json=payload,
-        headers=headers,
         timeout=30,
     )
 
@@ -45,10 +43,7 @@ def create_intasend_payment(
         return None
 
     current_app.logger.info(
-        f"INTASEND RESPONSE [{response.status_code}]: {data}"
+        f"INTASEND CHECKOUT [{response.status_code}]: {data}"
     )
-
-    if response.status_code not in (200, 201):
-        return None
 
     return data

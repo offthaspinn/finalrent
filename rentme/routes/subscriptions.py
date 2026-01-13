@@ -46,40 +46,32 @@ def pay_plan(plan_id):
     phone = normalize_msisdn(form.phone.data)
 
     try:
-        # -------------------------------------------------
-        # 1. CREATE PENDING SUBSCRIPTION INTENT
-        # -------------------------------------------------
         intent = SubscriptionIntent(
             user_id=current_user.id,
             plan_id=plan.id,
             status="pending",
-            amount=plan.price,
         )
-        db.session.add(intent)
-        db.session.flush()  # 🔑 generates intent.id safely
 
-        # -------------------------------------------------
-        # 2. INTERNAL REFERENCE (DB + IntaSend invoice_id)
-        # -------------------------------------------------
-        api_ref = f"SUBINT-{intent.id}"
+        db.session.add(intent)
+        db.session.flush()  # get intent.id
+
+        api_ref = f"PLAN-{plan.id}-INTENT-{intent.id}"
         intent.api_ref = api_ref
+        intent.amount = plan.price
 
         db.session.commit()
 
     except Exception:
         db.session.rollback()
-        current_app.logger.exception("Failed to create subscription intent")
+        current_app.logger.exception("Failed to create intent")
         flash("Unable to start payment. Please try again.", "danger")
         return redirect(url_for("subscriptions.list_plans"))
 
-    # -------------------------------------------------
-    # 3. START PAYMENT WITH INTASEND
-    # -------------------------------------------------
     response = create_intasend_payment(
         amount=plan.price,
         email=current_user.email,
         phone=phone,
-        invoice_id=api_ref,  # ✅ SUPPORTED FIELD
+        api_ref=api_ref,
         redirect_url=url_for(
             "subscriptions.payment_status",
             _external=True
@@ -88,7 +80,9 @@ def pay_plan(plan_id):
     )
 
     if not response or "url" not in response:
-        current_app.logger.error(f"IntaSend failed: {response}")
+        current_app.logger.error(
+            f"IntaSend checkout failed: {response}"
+        )
         flash("Unable to start payment. Please try again.", "danger")
         return redirect(url_for("subscriptions.list_plans"))
 
