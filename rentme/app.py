@@ -444,6 +444,7 @@ def enforce_property_and_subscription():
     # 5️⃣ Access granted
     # -----------------------------
     return
+
 # ======================================================
 # 🏠 PROPERTIES
 # ======================================================
@@ -470,6 +471,7 @@ def select_property():
 
 @app.route("/properties/<int:property_id>/activate")
 @login_required
+@subscription_required
 def activate_property(property_id):
     prop = Property.query.filter_by(
         id=property_id,
@@ -477,7 +479,6 @@ def activate_property(property_id):
     ).first_or_404()
 
     session["active_property_id"] = prop.id
-
     flash(f"Switched to {prop.name}", "success")
     return redirect(url_for("dashboard"))
 
@@ -491,56 +492,37 @@ def activate_property(property_id):
 def create_property():
     form = CreatePropertyForm()
 
-    current_app.logger.debug(
-        "create_property called; endpoint=%s; method=%s; session=%s; has_active=%s; can_create=%s; form_errors=%s",
-        request.endpoint,
-        request.method,
-        dict(session),
-        current_user.has_active_subscription(),
-        current_user.can_create_property(),
-        form.errors,
-    )
+    # Hard gate — never trust UI
+    if not current_user.can_create_property():
+        flash("Your plan does not allow you to add another property.", "warning")
+        return redirect(url_for("subscriptions.list_plans"))
 
     if form.validate_on_submit():
-        current_app.logger.debug("create_property form validated; form.errors=%s", form.errors)
-
-        # Enforce subscription limits
-        if not current_user.can_create_property():
-            current_app.logger.info("User %s cannot create more properties (limit reached).", current_user.email)
-            flash("Your plan does not allow you to add another property.", "warning")
-            return redirect(url_for("select_property"))
-
         name = form.name.data.strip()
         password = form.password.data
 
-        # Confirm password
         if not current_user.check_password(password):
-            current_app.logger.info("User %s provided incorrect password when creating property.", current_user.email)
-            flash("Incorrect password. Property not created.", "danger")
+            flash("Incorrect password.", "danger")
             return redirect(url_for("select_property"))
 
-        # Create property with safe commit
-        prop = Property(owner_id=current_user.id, name=name)
+        prop = Property(
+            owner_id=current_user.id,
+            name=name
+        )
+
         try:
             db.session.add(prop)
             db.session.commit()
         except Exception:
-            current_app.logger.exception("Failed to create property for user %s", current_user.email)
             db.session.rollback()
-            flash("An error occurred while creating the property.", "danger")
+            current_app.logger.exception("Property creation failed")
+            flash("Failed to create property.", "danger")
             return redirect(url_for("select_property"))
 
-        # Auto-activate property in session after successful commit
         session["active_property_id"] = prop.id
-        current_app.logger.info("Set active_property_id=%s in session for user=%s", prop.id, current_user.email)
-
         audit(current_user, "property_created", f"id:{prop.id}")
-        flash("New property created successfully!", "success")
+        flash("Property created successfully!", "success")
         return redirect(url_for("dashboard"))
-
-    # If POST but validation failed, log errors
-    if request.method == "POST":
-        current_app.logger.debug("create_property POST but validation failed; errors=%s", form.errors)
 
     return render_template("create_property.html", form=form)
 
@@ -553,6 +535,7 @@ def logout():
     logout_user()
     flash("Logged out.", "info")
     return redirect(url_for("login"))
+
 
 
 # -----------------------------------------------------

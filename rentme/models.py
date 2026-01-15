@@ -59,31 +59,24 @@ class User(db.Model, UserMixin):
 
     is_admin = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    last_logout = Column(DateTime, default=datetime.utcnow)
+    last_logout = db.Column(db.DateTime, default=datetime.utcnow)
 
     # -------------------------
-    # PAYMENT METHOD CHOSEN BY USER
+    # PAYMENT METHOD
     # -------------------------
-    # "SendMoney" | "Paybill" | "Till"
     payment_method = db.Column(db.String(50), nullable=True)
-
-    # SEND MONEY OPTION
     phone_number = db.Column(db.String(20), nullable=True)
-
-    # PAYBILL OPTION
     paybill_number = db.Column(db.String(30), nullable=True)
-
-    # TILL OPTION
     till_number = db.Column(db.String(30), nullable=True)
 
     # -------------------------
-    # DARAJA MPESA CREDENTIALS
+    # MPESA CREDENTIALS
     # -------------------------
     mpesa_consumer_key = db.Column(db.String(200), nullable=True)
     mpesa_consumer_secret = db.Column(db.String(200), nullable=True)
     mpesa_passkey = db.Column(db.String(200), nullable=True)
     mpesa_shortcode = db.Column(db.String(20), nullable=True)
-    mpesa_env = db.Column(db.String(20), default="sandbox")  # sandbox | production
+    mpesa_env = db.Column(db.String(20), default="sandbox")
     mpesa_callback_url = db.Column(db.String(500), nullable=True)
 
     # -------------------------
@@ -93,34 +86,20 @@ class User(db.Model, UserMixin):
     reset_code_expires_at = db.Column(db.DateTime, nullable=True)
 
     # -------------------------
-    # Relationships
+    # Relationships (✅ FIXED)
     # -------------------------
     properties = db.relationship(
         "Property",
-        backref="owner",
+        back_populates="owner",
         cascade="all, delete-orphan",
-        lazy=True
+        lazy="dynamic"
     )
 
     subscriptions = db.relationship(
         "Subscription",
-        backref="user",
+        back_populates="user",
         cascade="all, delete-orphan",
-        lazy=True
-    )
-
-    payments = db.relationship(
-        "Payment",
-        backref="payer",
-        cascade="all, delete-orphan",
-        lazy=True
-    )
-
-    audit_logs = db.relationship(
-        "AuditLog",
-        backref="user",
-        cascade="all, delete-orphan",
-        lazy=True
+        lazy="dynamic"
     )
 
     # -------------------------
@@ -135,12 +114,15 @@ class User(db.Model, UserMixin):
     # =========================
     # SUBSCRIPTION HELPERS
     # =========================
-    def has_active_subscription(self) -> bool:
+    def active_subscription(self):
         """
-        Check if user has a valid, non-expired subscription.
-        Automatically deactivates expired subscriptions.
+        Returns active subscription.
+        Supports grace periods.
+        Automatically deactivates expired ones.
         """
         from rentme.models import Subscription
+
+        now = datetime.utcnow()
 
         sub = (
             Subscription.query
@@ -150,42 +132,36 @@ class User(db.Model, UserMixin):
         )
 
         if not sub:
-            return False
+            return None
 
-        if sub.expires_at and sub.expires_at < datetime.utcnow():
-            sub.is_active = False
+        # ✅ Fully active
+        if sub.expires_at >= now:
+            sub.is_grace = False
+            return sub
+
+        # 🟡 Grace period
+        if sub.grace_expires_at and sub.grace_expires_at >= now:
+            sub.is_grace = True
             db.session.commit()
-            return False
+            return sub
 
-        return True
+        # ❌ Fully expired
+        sub.is_active = False
+        sub.is_grace = False
+        db.session.commit()
+        return None
 
-    def active_subscription(self):
-        """
-        Return active subscription or None
-        """
-        from rentme.models import Subscription
-
-        return (
-            Subscription.query
-            .filter_by(user_id=self.id, is_active=True)
-            .order_by(Subscription.created_at.desc())
-            .first()
-        )
+    def has_active_subscription(self) -> bool:
+        return self.active_subscription() is not None
 
     def can_create_property(self) -> bool:
-        """
-        Enforce property limit based on subscription plan
-        """
         sub = self.active_subscription()
-        if not sub or not sub.plan:
+        if not sub:
             return False
-
-        return len(self.properties) < sub.plan.max_properties
+        return self.properties.count() < sub.properties_allowed
 
     def __repr__(self):
         return f"<User {self.email} | admin={self.is_admin}>"
-
-
 
 class LandlordSettings(db.Model):
     __tablename__ = "landlord_settings"
@@ -400,16 +376,36 @@ def auto_update_all_unpaid_rents():
 #Properties
 
 class Property(db.Model):
+    __tablename__ = "property"
+
     id = db.Column(db.Integer, primary_key=True)
-    owner_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+
+    owner_id = db.Column(
+        db.Integer,
+        db.ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False
+    )
+
     name = db.Column(db.String(120), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    # -------------------------
+    # Relationships
+    # -------------------------
+    owner = db.relationship(
+        "User",
+        back_populates="properties"
+    )
 
     tenants = db.relationship(
         "Tenant",
         backref="property",
-        cascade="all, delete-orphan"
+        cascade="all, delete-orphan",
+        passive_deletes=True
     )
+
+    def __repr__(self):
+        return f"<Property {self.id} owner={self.owner_id}>"
 
 
 class Subscription(db.Model):
@@ -417,30 +413,86 @@ class Subscription(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
 
-    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
-    plan_id = db.Column(db.Integer, db.ForeignKey("plan.id"), nullable=True)
+    user_id = db.Column(
+        db.Integer,
+        db.ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False
+    )
 
+    plan_id = db.Column(
+        db.Integer,
+        db.ForeignKey("plan.id", ondelete="RESTRICT"),
+        nullable=True
+    )
+
+    intent_id = db.Column(
+        db.Integer,
+        db.ForeignKey("subscription_intents.id"),
+        unique=True,
+        nullable=True  # trials / admin subs
+    )
+
+    # Snapshot values
     plan_name = db.Column(db.String(50), nullable=False)
     properties_allowed = db.Column(db.Integer, nullable=False)
 
-    amount_paid = db.Column(db.Numeric(10, 2), nullable=False)
+    amount_paid = db.Column(db.Numeric(10, 2), nullable=False, default=0)
     payment_invoice_id = db.Column(db.String(100), unique=True)
 
     is_active = db.Column(db.Boolean, default=True)
 
+    # States
+    is_trial = db.Column(db.Boolean, default=False)
+    is_grace = db.Column(db.Boolean, default=False)
+
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     expires_at = db.Column(db.DateTime, nullable=False)
+    grace_expires_at = db.Column(db.DateTime)
 
-    plan = db.relationship("Plan", backref="subscriptions")
+    # -------------------------
+    # Relationships (✅ FINAL)
+    # -------------------------
+    user = db.relationship(
+        "User",
+        back_populates="subscriptions"
+    )
+
+    plan = db.relationship(
+        "Plan",
+        back_populates="subscriptions"
+    )
+
+    intent = db.relationship("SubscriptionIntent")
+
+    def __repr__(self):
+        return (
+            f"<Subscription user={self.user_id} "
+            f"plan={self.plan_name} "
+            f"active={self.is_active} "
+            f"trial={self.is_trial}>"
+        )
 
 class Plan(db.Model):
+    __tablename__ = "plan"
+
     id = db.Column(db.Integer, primary_key=True)
 
-    name = db.Column(db.String(50))
-    price = db.Column(db.Integer)  # in KES
-    max_properties = db.Column(db.Integer)
-
+    name = db.Column(db.String(50), nullable=False)
+    price = db.Column(db.Integer, nullable=False)  # KES
+    max_properties = db.Column(db.Integer, nullable=False)
     duration_days = db.Column(db.Integer, default=30)
+
+    # ✅ FIXED — NO backref
+    subscriptions = db.relationship(
+        "Subscription",
+        back_populates="plan",
+        cascade="all, delete-orphan",
+        lazy="dynamic"
+    )
+
+    def __repr__(self):
+        return f"<Plan {self.name}>"
+
 
 class SubscriptionIntent(db.Model):
     __tablename__ = "subscription_intents"
@@ -450,28 +502,38 @@ class SubscriptionIntent(db.Model):
     user_id = db.Column(
         db.Integer,
         db.ForeignKey("user.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=False
     )
+
     plan_id = db.Column(
         db.Integer,
         db.ForeignKey("plan.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=False
     )
 
-    # IntaSend-aligned fields
-    reference = db.Column(db.String(100), unique=True, nullable=False)  # REF
-    payment_invoice_id = db.Column(db.String(100), unique=True)         # INV_xxx
-    transaction_id = db.Column(db.String(100))                          # Trans ID
+    # IntaSend identifiers
+    reference = db.Column(db.String(100), unique=True, nullable=False)
+    payment_invoice_id = db.Column(db.String(100), unique=True)
+    transaction_id = db.Column(db.String(100))
 
-    payer_account = db.Column(db.String(120))                           # email
+    payer_account = db.Column(db.String(120))
     currency = db.Column(db.String(10), default="KES")
 
     amount = db.Column(db.Numeric(10, 2), nullable=False)
     charge = db.Column(db.Numeric(10, 2), default=0)
 
-    status = db.Column(db.String(20), nullable=False)                   # COMPLETE / FAILED
-    clearing_status = db.Column(db.String(20))                          # AVAILABLE
+    status = db.Column(
+        db.String(20),
+        nullable=False,
+        default="PENDING"  # PENDING | COMPLETE | FAILED
+    )
+
+    clearing_status = db.Column(db.String(20))  # AVAILABLE
 
     created_at = db.Column(db.DateTime, server_default=db.func.now())
     updated_at = db.Column(db.DateTime, onupdate=db.func.now())
 
+    user = db.relationship("User")
+    plan = db.relationship("Plan")
+
+    

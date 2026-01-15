@@ -1,10 +1,10 @@
 from flask import Blueprint, request, jsonify, current_app
-from datetime import datetime, timedelta
-from sqlalchemy.exc import SQLAlchemyError
+from datetime import datetime
 import requests
 
 from rentme.extensions import db
-from rentme.models import SubscriptionIntent, Subscription, User, Plan
+from rentme.models import SubscriptionIntent
+from rentme.services.subscriptions import activate_paid_subscription
 
 # ============================================================
 # Blueprint
@@ -45,6 +45,8 @@ def verify_intasend_transaction(invoice_id: str) -> bool:
 
     data = resp.json()
     return data.get("state") == "COMPLETE"
+
+
 # ============================================================
 # IntaSend Webhook
 # ============================================================
@@ -56,43 +58,48 @@ def intasend_webhook():
 
     reference = data.get("reference")
     invoice_id = data.get("invoice_id")
-    status = data.get("status")
+    status = (data.get("status") or "").upper()
 
     intent = SubscriptionIntent.query.filter_by(reference=reference).first()
     if not intent:
+        # Unknown reference → acknowledge to stop retries
         return jsonify(ok=True), 200
 
+    # --------------------------------------------------------
+    # Idempotency guard
+    # --------------------------------------------------------
+    if intent.status == "COMPLETE":
+        return jsonify(ok=True), 200
+
+    # --------------------------------------------------------
+    # Update intent snapshot
+    # --------------------------------------------------------
     intent.payment_invoice_id = invoice_id
     intent.transaction_id = data.get("transaction_id")
-    intent.status = status
-    intent.amount = data.get("amount")
+    intent.amount = data.get("amount", intent.amount)
     intent.charge = data.get("charge", 0)
     intent.clearing_status = data.get("clearing_status")
     intent.updated_at = datetime.utcnow()
 
+    # --------------------------------------------------------
+    # Non-success states
+    # --------------------------------------------------------
     if status != "COMPLETE":
+        intent.status = status
         db.session.commit()
         return jsonify(ok=True), 200
 
-    plan = Plan.query.get(intent.plan_id)
+    # --------------------------------------------------------
+    # VERIFY WITH INTASEND (MANDATORY)
+    # --------------------------------------------------------
+    if not verify_intasend_transaction(invoice_id):
+        intent.status = "FAILED"
+        db.session.commit()
+        return jsonify(ok=True), 200
 
-    Subscription.query.filter_by(
-        user_id=intent.user_id,
-        is_active=True
-    ).update({"is_active": False})
-
-    subscription = Subscription(
-        user_id=intent.user_id,
-        plan_id=plan.id,
-        plan_name=plan.name,
-        properties_allowed=plan.max_properties,
-        amount_paid=intent.amount,
-        payment_invoice_id=invoice_id,
-        expires_at=datetime.utcnow() + timedelta(days=plan.duration_days),
-        is_active=True,
-    )
-
-    db.session.add(subscription)
-    db.session.commit()
+    # --------------------------------------------------------
+    # ✅ SINGLE SOURCE OF TRUTH
+    # --------------------------------------------------------
+    activate_paid_subscription(intent)
 
     return jsonify(ok=True), 200

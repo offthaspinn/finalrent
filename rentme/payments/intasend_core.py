@@ -1,15 +1,22 @@
 import requests
 from flask import current_app
 
+
 def create_intasend_payment(
     *,
     amount,
     phone,
     email,
-    reference,
-    redirect_url,
     description,
+    redirect_url,
+    api_ref=None,
+    reference=None,
 ):
+    # Normalize reference
+    ref = api_ref or reference
+    if not ref:
+        raise ValueError("Payment reference (api_ref) is required")
+
     payload = {
         "public_key": current_app.config["INTASEND_PUBLIC_KEY"],
         "amount": float(amount),
@@ -18,7 +25,7 @@ def create_intasend_payment(
         "phone_number": phone,
         "redirect_url": redirect_url,
         "description": description,
-        "reference": reference,
+        "reference": ref,
     }
 
     response = requests.post(

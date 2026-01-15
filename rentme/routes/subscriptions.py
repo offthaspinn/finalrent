@@ -33,11 +33,12 @@ def list_plans():
 
 # -------------------------------------------------------------------
 # START SUBSCRIPTION PAYMENT
-# -------------------------------------------------------------------
+# ------------------------------------------------------------------
 @subscriptions_bp.route("/pay/<int:plan_id>", methods=["POST"])
 @login_required
 def pay_plan(plan_id):
     form = SubscriptionForm()
+
     if not form.validate_on_submit():
         flash("Invalid phone number.", "danger")
         return redirect(url_for("subscriptions.list_plans"))
@@ -49,45 +50,41 @@ def pay_plan(plan_id):
         intent = SubscriptionIntent(
             user_id=current_user.id,
             plan_id=plan.id,
-            status="pending",
+            reference=f"IPLAN-{plan.id}-{uuid4().hex[:10]}",
+            amount=plan.price,
+            status="PENDING",
+            payer_account=current_user.email,
         )
-
         db.session.add(intent)
-        db.session.flush()  # get intent.id
-
-        api_ref = f"PLAN-{plan.id}-INTENT-{intent.id}"
-        intent.api_ref = api_ref
-        intent.amount = plan.price
-
         db.session.commit()
-
     except Exception:
         db.session.rollback()
-        current_app.logger.exception("Failed to create intent")
+        current_app.logger.exception("Failed to create subscription intent")
         flash("Unable to start payment. Please try again.", "danger")
         return redirect(url_for("subscriptions.list_plans"))
 
     response = create_intasend_payment(
         amount=plan.price,
-        email=current_user.email,
         phone=phone,
-        api_ref=api_ref,
-        redirect_url=url_for(
-            "subscriptions.payment_status",
-            _external=True
-        ),
+        email=current_user.email,
+        api_ref=intent.reference,  # ✅ FIX
+        redirect_url=url_for("subscriptions.payment_status", _external=True),
         description=f"{plan.name} subscription",
     )
 
-    if not response or "url" not in response:
-        current_app.logger.error(
-            f"IntaSend checkout failed: {response}"
-        )
-        flash("Unable to start payment. Please try again.", "danger")
+    if not response or not isinstance(response, dict):
+        flash("Unable to start payment.", "danger")
+        return redirect(url_for("subscriptions.list_plans"))
+
+    checkout_url = response.get("url") or response.get("checkout_url")
+    if not checkout_url:
+        current_app.logger.error(f"IntaSend error: {response}")
+        flash("Unable to start payment.", "danger")
         return redirect(url_for("subscriptions.list_plans"))
 
     session["pending_plan"] = plan.id
-    return redirect(response["url"])
+    return redirect(checkout_url)
+
 
 # PAYMENT STATUS PAGE
 # -------------------------------------------------------------------
