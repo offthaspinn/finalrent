@@ -185,31 +185,7 @@ class User(db.Model, UserMixin):
     def __repr__(self):
         return f"<User {self.email} | admin={self.is_admin}>"
 
-class SubscriptionIntent(db.Model):
-    __tablename__ = "subscription_intents"
 
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(
-        db.Integer,
-        db.ForeignKey("user.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    plan_id = db.Column(
-        db.Integer,
-        db.ForeignKey("plan.id", ondelete="RESTRICT"),
-        nullable=False,
-    )
-
-    status = db.Column(db.String(20))
-    amount = db.Column(db.Numeric(10, 2))
-    api_ref = db.Column(db.String(100), nullable=False, unique=True)
-
-    payment_ref = db.Column(db.String(100), unique=True)
-    payment_reference = db.Column(db.String(100))
-    created_at = db.Column(
-        db.DateTime, server_default=db.func.now()
-    )
-    completed_at = db.Column(db.DateTime)
 
 class LandlordSettings(db.Model):
     __tablename__ = "landlord_settings"
@@ -422,6 +398,7 @@ def auto_update_all_unpaid_rents():
     return updated
 
 #Properties
+
 class Property(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     owner_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
@@ -439,22 +416,22 @@ class Subscription(db.Model):
     __tablename__ = "subscription"
 
     id = db.Column(db.Integer, primary_key=True)
+
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    plan_id = db.Column(db.Integer, db.ForeignKey("plan.id"), nullable=True)
 
-    plan_id = db.Column(db.Integer, db.ForeignKey("plan.id"), nullable=True)  # ✅ FK explicitly
     plan_name = db.Column(db.String(50), nullable=False)
-
     properties_allowed = db.Column(db.Integer, nullable=False)
-    amount_paid = db.Column(db.Float, nullable=False)
+
+    amount_paid = db.Column(db.Numeric(10, 2), nullable=False)
+    payment_invoice_id = db.Column(db.String(100), unique=True)
 
     is_active = db.Column(db.Boolean, default=True)
-    mpesa_receipt = db.Column(db.String(50))
-    created_at = db.Column(db.DateTime)
-    expires_at = db.Column(db.DateTime)
 
-    # Relationship
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    expires_at = db.Column(db.DateTime, nullable=False)
+
     plan = db.relationship("Plan", backref="subscriptions")
-
 
 class Plan(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -464,4 +441,37 @@ class Plan(db.Model):
     max_properties = db.Column(db.Integer)
 
     duration_days = db.Column(db.Integer, default=30)
+
+class SubscriptionIntent(db.Model):
+    __tablename__ = "subscription_intents"
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    user_id = db.Column(
+        db.Integer,
+        db.ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    plan_id = db.Column(
+        db.Integer,
+        db.ForeignKey("plan.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+
+    # IntaSend-aligned fields
+    reference = db.Column(db.String(100), unique=True, nullable=False)  # REF
+    payment_invoice_id = db.Column(db.String(100), unique=True)         # INV_xxx
+    transaction_id = db.Column(db.String(100))                          # Trans ID
+
+    payer_account = db.Column(db.String(120))                           # email
+    currency = db.Column(db.String(10), default="KES")
+
+    amount = db.Column(db.Numeric(10, 2), nullable=False)
+    charge = db.Column(db.Numeric(10, 2), default=0)
+
+    status = db.Column(db.String(20), nullable=False)                   # COMPLETE / FAILED
+    clearing_status = db.Column(db.String(20))                          # AVAILABLE
+
+    created_at = db.Column(db.DateTime, server_default=db.func.now())
+    updated_at = db.Column(db.DateTime, onupdate=db.func.now())
 
