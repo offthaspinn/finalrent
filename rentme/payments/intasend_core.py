@@ -10,9 +10,11 @@ def create_intasend_payment(
     description,
     redirect_url,
     api_ref=None,
-    reference=None,
+    reference=None,  # backward compatibility
 ):
-    # Normalize reference
+    # -------------------------------------------------
+    # Normalize reference (single source of truth)
+    # -------------------------------------------------
     ref = api_ref or reference
     if not ref:
         raise ValueError("Payment reference (api_ref) is required")
@@ -25,7 +27,9 @@ def create_intasend_payment(
         "phone_number": phone,
         "redirect_url": redirect_url,
         "description": description,
-        "reference": ref,
+
+        # ✅ THIS IS WHAT INTASEND USES
+        "api_ref": ref,
     }
 
     response = requests.post(

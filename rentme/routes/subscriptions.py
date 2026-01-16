@@ -20,9 +20,9 @@ from rentme.extensions import db
 subscriptions_bp = Blueprint("subscriptions", __name__, url_prefix="/subscriptions")
 
 
-# -------------------------------------------------------------------
+# ------------------------------------------------------------
 # LIST PLANS
-# -------------------------------------------------------------------
+# ------------------------------------------------------------
 @subscriptions_bp.route("/plans", methods=["GET"])
 @login_required
 def list_plans():
@@ -31,9 +31,9 @@ def list_plans():
     return render_template("subscriptions/plans.html", plans=plans, form=form)
 
 
-# -------------------------------------------------------------------
-# START SUBSCRIPTION PAYMENT
-# ------------------------------------------------------------------
+# ------------------------------------------------------------
+# START PAYMENT
+# ------------------------------------------------------------
 @subscriptions_bp.route("/pay/<int:plan_id>", methods=["POST"])
 @login_required
 def pay_plan(plan_id):
@@ -59,39 +59,37 @@ def pay_plan(plan_id):
         db.session.commit()
     except Exception:
         db.session.rollback()
-        current_app.logger.exception("Failed to create subscription intent")
-        flash("Unable to start payment. Please try again.", "danger")
+        current_app.logger.exception("Intent creation failed")
+        flash("Unable to start payment.", "danger")
         return redirect(url_for("subscriptions.list_plans"))
 
     response = create_intasend_payment(
         amount=plan.price,
         phone=phone,
         email=current_user.email,
-        api_ref=intent.reference,  # ✅ FIX
-        redirect_url=url_for("subscriptions.payment_status", _external=True),
+        api_ref=intent.reference,   # ✅ FIXED
+        redirect_url=url_for(
+            "subscriptions.payment_status",
+            _external=True,
+        ),
         description=f"{plan.name} subscription",
     )
 
-    if not response or not isinstance(response, dict):
-        flash("Unable to start payment.", "danger")
-        return redirect(url_for("subscriptions.list_plans"))
-
     checkout_url = response.get("url") or response.get("checkout_url")
     if not checkout_url:
-        current_app.logger.error(f"IntaSend error: {response}")
-        flash("Unable to start payment.", "danger")
+        flash("Payment initialization failed.", "danger")
         return redirect(url_for("subscriptions.list_plans"))
 
     session["pending_plan"] = plan.id
     return redirect(checkout_url)
 
 
+# ------------------------------------------------------------
 # PAYMENT STATUS PAGE
-# -------------------------------------------------------------------
+# ------------------------------------------------------------
 @subscriptions_bp.route("/payment-status", methods=["GET"])
 @login_required
 def payment_status():
-    # Authoritative check: active subscription for current user
     subscription = (
         Subscription.query
         .filter_by(user_id=current_user.id, is_active=True)
@@ -99,11 +97,9 @@ def payment_status():
         .first()
     )
 
-    # If webhook already created subscription, clear UX-only flag
-    if subscription and session.get("pending_plan"):
+    if subscription:
         session.pop("pending_plan", None)
 
-    # If no subscription yet, show the pending plan (if any)
     pending_plan = None
     if not subscription and session.get("pending_plan"):
         pending_plan = Plan.query.get(session["pending_plan"])
@@ -115,16 +111,12 @@ def payment_status():
     )
 
 
-# -------------------------------------------------------------------
+# ------------------------------------------------------------
 # POLLING ENDPOINT (AJAX)
-# -------------------------------------------------------------------
+# ------------------------------------------------------------
 @subscriptions_bp.route("/payment-status/check", methods=["GET"])
 @login_required
 def payment_status_check():
-    """
-    Polling endpoint used by the client to detect when the webhook
-    has created an active subscription for the current user.
-    """
     subscription = (
         Subscription.query
         .filter_by(user_id=current_user.id, is_active=True)
@@ -136,9 +128,8 @@ def payment_status_check():
         return jsonify(
             ok=True,
             plan_name=subscription.plan_name,
-            amount_paid=float(subscription.amount_paid or 0),
-            expires_at=subscription.expires_at.isoformat()
-            if subscription.expires_at else None,
+            amount_paid=float(subscription.amount_paid),
+            expires_at=subscription.expires_at.isoformat(),
         )
 
     return jsonify(ok=False)

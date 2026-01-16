@@ -8,29 +8,48 @@ from rentme.models import Subscription, SubscriptionIntent, Plan
 # ----------------------------------------------------
 # INTERNAL: deactivate existing subscriptions
 # ----------------------------------------------------
-def _deactivate_existing(user_id):
+def _deactivate_existing(user_id: int):
     Subscription.query.filter_by(
         user_id=user_id,
-        is_active=True
-    ).update({
-        "is_active": False,
-        "expires_at": datetime.utcnow()
-    })
+        is_active=True,
+    ).update(
+        {
+            "is_active": False,
+            "is_grace": False,
+        },
+        synchronize_session=False,
+    )
 
 
 # ----------------------------------------------------
 # PAID SUBSCRIPTION (Webhook-driven)
 # ----------------------------------------------------
 def activate_paid_subscription(intent: SubscriptionIntent) -> Subscription | None:
-    if intent.status == "COMPLETE":
-        return None  # idempotent
+    """
+    Finalizes a paid subscription intent into an active subscription.
+    MUST be idempotent.
+    """
 
-    plan = intent.plan
+    # ------------------------------------
+    # Idempotency guard
+    # ------------------------------------
+    if intent.status == "COMPLETE":
+        return None
+
+    plan = intent.plan or Plan.query.get(intent.plan_id)
     if not plan:
         return None
 
+    now = datetime.utcnow()
+
+    # ------------------------------------
+    # Deactivate existing subscriptions
+    # ------------------------------------
     _deactivate_existing(intent.user_id)
 
+    # ------------------------------------
+    # Create subscription snapshot
+    # ------------------------------------
     subscription = Subscription(
         user_id=intent.user_id,
         plan_id=plan.id,
@@ -40,12 +59,18 @@ def activate_paid_subscription(intent: SubscriptionIntent) -> Subscription | Non
         amount_paid=intent.amount,
         payment_invoice_id=intent.payment_invoice_id,
         is_active=True,
-        expires_at=datetime.utcnow() + timedelta(days=plan.duration_days),
-        grace_expires_at=datetime.utcnow() + timedelta(days=plan.duration_days + 3),
+        is_trial=False,
+        is_grace=False,
+        created_at=now,
+        expires_at=now + timedelta(days=plan.duration_days),
+        grace_expires_at=now + timedelta(days=plan.duration_days + 3),
     )
 
+    # ------------------------------------
+    # Finalize intent
+    # ------------------------------------
     intent.status = "COMPLETE"
-    intent.updated_at = datetime.utcnow()
+    intent.updated_at = now
 
     db.session.add(subscription)
     db.session.commit()
@@ -56,10 +81,16 @@ def activate_paid_subscription(intent: SubscriptionIntent) -> Subscription | Non
 # ----------------------------------------------------
 # FREE TRIAL
 # ----------------------------------------------------
-def create_free_trial(user, days=7, grace_days=3) -> Subscription | None:
+def create_free_trial(user, days: int = 7, grace_days: int = 3) -> Subscription | None:
+    """
+    Auto-creates a free trial subscription.
+    """
+
     trial_plan = Plan.query.filter_by(name="Trial").first()
     if not trial_plan:
         return None
+
+    now = datetime.utcnow()
 
     _deactivate_existing(user.id)
 
@@ -71,8 +102,10 @@ def create_free_trial(user, days=7, grace_days=3) -> Subscription | None:
         amount_paid=0,
         is_trial=True,
         is_active=True,
-        expires_at=datetime.utcnow() + timedelta(days=days),
-        grace_expires_at=datetime.utcnow() + timedelta(days=days + grace_days),
+        is_grace=False,
+        created_at=now,
+        expires_at=now + timedelta(days=days),
+        grace_expires_at=now + timedelta(days=days + grace_days),
     )
 
     db.session.add(sub)
@@ -83,7 +116,13 @@ def create_free_trial(user, days=7, grace_days=3) -> Subscription | None:
 # ----------------------------------------------------
 # ADMIN FORCE ACTIVATE
 # ----------------------------------------------------
-def admin_force_activate(user, plan: Plan, days=30) -> Subscription:
+def admin_force_activate(user, plan: Plan, days: int = 30) -> Subscription:
+    """
+    Force-activates a subscription (admin override).
+    """
+
+    now = datetime.utcnow()
+
     _deactivate_existing(user.id)
 
     sub = Subscription(
@@ -94,9 +133,12 @@ def admin_force_activate(user, plan: Plan, days=30) -> Subscription:
         amount_paid=0,
         payment_invoice_id=f"ADMIN-{uuid4().hex[:8]}",
         is_active=True,
+        is_trial=False,
+        is_grace=False,
         forced_by_admin=True,
-        expires_at=datetime.utcnow() + timedelta(days=days),
-        grace_expires_at=datetime.utcnow() + timedelta(days=days + 5),
+        created_at=now,
+        expires_at=now + timedelta(days=days),
+        grace_expires_at=now + timedelta(days=days + 5),
     )
 
     db.session.add(sub)
