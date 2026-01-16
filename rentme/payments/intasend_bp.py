@@ -43,6 +43,7 @@ def verify_intasend_transaction(invoice_id: str) -> bool:
 
 
 # ------------------------------------------------------------
+# ------------------------------------------------------------
 # INTA SEND WEBHOOK
 # ------------------------------------------------------------
 @intasend_bp.route("/webhook", methods=["POST"])
@@ -51,48 +52,43 @@ def intasend_webhook():
     if not data:
         return jsonify(ok=False), 400
 
-    # ✅ IntaSend sends api_ref
     reference = data.get("api_ref")
     invoice_id = data.get("invoice_id")
     status = (data.get("status") or "").upper()
 
     intent = SubscriptionIntent.query.filter_by(reference=reference).first()
     if not intent:
-        # Unknown reference → ACK to stop retries
+        # ACK unknown reference to stop retries
         return jsonify(ok=True), 200
 
-    # --------------------------------------------------------
-    # IDEMPOTENCY GUARD
-    # --------------------------------------------------------
+    # Idempotency
     if intent.status == "COMPLETE":
         return jsonify(ok=True), 200
 
-    # --------------------------------------------------------
-    # UPDATE INTENT SNAPSHOT
-    # --------------------------------------------------------
+    # Snapshot update
     intent.payment_invoice_id = invoice_id
-    intent.transaction_id = data.get("transaction_id")
+    intent.transaction_id = (
+        data.get("transaction_id")
+        or data.get("mpesa_reference")
+    )
     intent.amount = data.get("amount", intent.amount)
     intent.charge = data.get("charge", 0)
     intent.clearing_status = data.get("clearing_status")
     intent.updated_at = datetime.utcnow()
 
+    # Not completed yet
     if status != "COMPLETE":
         intent.status = status
         db.session.commit()
         return jsonify(ok=True), 200
 
-    # --------------------------------------------------------
-    # VERIFY WITH INTASEND (SECURITY)
-    # --------------------------------------------------------
+    # Verify with IntaSend (security)
     if not verify_intasend_transaction(invoice_id):
         intent.status = "FAILED"
         db.session.commit()
         return jsonify(ok=True), 200
 
-    # --------------------------------------------------------
-    # ✅ FINAL ACTIVATION (SINGLE SOURCE OF TRUTH)
-    # --------------------------------------------------------
+    # ✅ Activate subscription
     activate_paid_subscription(intent)
 
     return jsonify(ok=True), 200

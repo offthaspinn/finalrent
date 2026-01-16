@@ -809,27 +809,14 @@ def mpesa_validate():
 
 
 # --------------------------------------------------------------------
-# CONFIRMATION ENDPOINT  (🔥 FIXED VERSION)
+# CONFIRMATION ENDPOINT  
 # --------------------------------------------------------------------
 
+@limiter.limit("10/minute")
 @limiter.limit("10/minute")
 @mpesa_bp.route("/payment_callback/confirmation", methods=["POST"])
 @csrf_exempt
 def mpesa_confirmation():
-    """
-    Daraja payment confirmation endpoint.
-    Records payment AND activates subscription.
-    """
-    from datetime import datetime, timedelta
-    from flask import request, jsonify
-    from rentme.models import (
-        User,
-        Subscription,
-        Plan,
-        SubscriptionIntent   # 👈 ADD THIS MODEL
-    )
-    from rentme.extensions import db
-
     payload = request.get_json(silent=True) or {}
     logger.info("M-PESA CONFIRMATION PAYLOAD: %s", payload)
 
@@ -837,161 +824,64 @@ def mpesa_confirmation():
     stk = body.get("stkCallback")
 
     try:
-        # ------------------------------------------------
-        # 1. PARSE PAYMENT DATA
-        # ------------------------------------------------
+        # -------------------------------
+        # PARSE PAYMENT DATA
+        # -------------------------------
         if stk:
             items = stk.get("CallbackMetadata", {}).get("Item", [])
             data = {i["Name"]: i.get("Value") for i in items if isinstance(i, dict)}
 
-            tx_id = data.get("MpesaReceiptNumber") or stk.get("CheckoutRequestID")
+            tx_id = data.get("MpesaReceiptNumber")
             amount = float(data.get("Amount", 0))
             phone = data.get("PhoneNumber")
-            account_ref = stk.get("AccountReference")
         else:
-            tx_id = (
-                body.get("MpesaReceiptNumber")
-                or body.get("TransID")
-                or body.get("TransactionID")
-            )
+            tx_id = body.get("MpesaReceiptNumber") or body.get("TransID")
             amount = float(body.get("Amount", 0))
-            phone = body.get("MSISDN") or body.get("Msisdn")
-            account_ref = body.get("BillRefNumber")
+            phone = body.get("MSISDN")
 
         if not tx_id or amount <= 0:
-            logger.warning("Invalid confirmation payload")
-            return jsonify({"ResultCode": 1, "ResultDesc": "Invalid data"}), 200
+            return jsonify({"ResultCode": 1}), 200
 
         msisdn = _normalize_msisdn(phone)
 
-        # ------------------------------------------------
-        # 2. VERIFY WITH DARAJA (NON-BLOCKING)
-        # ------------------------------------------------
-        try:
-            verify_transaction_with_daraja(
-                tx_id=str(tx_id),
-                amount=amount,
-                msisdn=msisdn or "",
-                account_ref=account_ref or ""
-            )
-        except Exception:
-            logger.exception("Daraja verification failed (ignored)")
+        # -------------------------------
+        # RECORD PAYMENT
+        # -------------------------------
+        process_payment_orm(
+            account_ref=None,
+            amount=amount,
+            transaction_id=str(tx_id),
+            note="Daraja confirmation",
+            msisdn=msisdn
+        )
 
-        # ------------------------------------------------
-        # 3. RECORD PAYMENT
-        # ------------------------------------------------
-        try:
-            result = process_payment_orm(
-                account_ref=account_ref,
-                amount=amount,
-                transaction_id=str(tx_id),
-                note="Daraja confirmation",
-                msisdn=msisdn
-            )
-        except Exception:
-            logger.exception("process_payment_orm failed")
-            result = {"ok": False}
+        # -------------------------------
+        # ACTIVATE SUBSCRIPTION
+        # -------------------------------
+        user = User.query.filter_by(login_phone=msisdn).first()
+        if not user:
+            return jsonify({"ResultCode": 0}), 200
 
-        # ------------------------------------------------
-        # 4. ACTIVATE SUBSCRIPTION  🔥 FIXED LOGIC
-        # ------------------------------------------------
-        if result.get("ok"):
-            user = User.query.filter_by(login_phone=msisdn).first()
+        intent = SubscriptionIntent.query.filter_by(
+            user_id=user.id,
+            status="PENDING"
+        ).order_by(SubscriptionIntent.created_at.desc()).first()
 
-            if not user:
-                logger.warning("No user found for phone %s", msisdn)
-                return jsonify({"ResultCode": 0, "ResultDesc": "Payment recorded"}), 200
+        if not intent:
+            return jsonify({"ResultCode": 0}), 200
 
-            # ------------------------------------------------
-            # 4A. FIND PENDING SUBSCRIPTION INTENT (BEST WAY)
-            # ------------------------------------------------
-            intent = SubscriptionIntent.query.filter_by(
-                user_id=user.id,
-                status="pending"
-            ).order_by(SubscriptionIntent.created_at.desc()).first()
+        intent.transaction_id = tx_id
+        intent.status = "COMPLETE"
+        intent.updated_at = datetime.utcnow()
+        db.session.commit()
 
-            plan = None
+        activate_paid_subscription(intent)
 
-            if intent:
-                plan = Plan.query.get(intent.plan_id)
-            else:
-                # ------------------------------------------------
-                # 4B. SAFE FALLBACK (NO PLAN- REQUIRED)
-                # ------------------------------------------------
-                logger.warning("No subscription intent found. Using fallback plan.")
-                plan = Plan.query.order_by(Plan.id.desc()).first()
-
-            if not plan:
-                logger.error("No plan found for activation")
-                return jsonify({"ResultCode": 0, "ResultDesc": "Payment recorded"}), 200
-
-            # ------------------------------------------------
-            # 4C. DEACTIVATE OLD SUBSCRIPTIONS
-            # ------------------------------------------------
-            Subscription.query.filter_by(
-                user_id=user.id,
-                is_active=True
-            ).update({"is_active": False})
-
-            # ------------------------------------------------
-            # 4D. CREATE NEW SUBSCRIPTION
-            # ------------------------------------------------
-            expires_at = datetime.utcnow() + timedelta(days=plan.duration_days)
-
-            subscription = Subscription(
-                user_id=user.id,
-                plan_id=plan.id,
-                plan_name=plan.name,
-                properties_allowed=plan.max_properties,
-                amount_paid=amount,
-                mpesa_receipt=tx_id,
-                is_active=True,
-                created_at=datetime.utcnow(),
-                expires_at=expires_at
-            )
-
-            db.session.add(subscription)
-
-            if intent:
-                intent.status = "completed"
-
-            db.session.commit()
-
-            logger.info(
-                "SUBSCRIPTION ACTIVATED → user=%s plan=%s",
-                user.id, plan.id
-            )
-
-            return jsonify({
-                "ResultCode": 0,
-                "ResultDesc": "Confirmation received successfully"
-            }), 200
-
-        # ------------------------------------------------
-        # 5. SANDBOX FALLBACK
-        # ------------------------------------------------
-        if not MPESA_LIVE:
-            logger.warning(
-                "[SIMULATION] Payment accepted → %s %s",
-                tx_id, amount
-            )
-            return jsonify({
-                "ResultCode": 0,
-                "ResultDesc": "Confirmation received (simulated)"
-            }), 200
-
-        # ------------------------------------------------
-        # 6. LIVE FAILURE
-        # ------------------------------------------------
-        logger.error("LIVE payment failed → %s", tx_id)
         return jsonify({
-            "ResultCode": 1,
-            "ResultDesc": "Payment processing failed"
+            "ResultCode": 0,
+            "ResultDesc": "Confirmation received successfully"
         }), 200
 
     except Exception:
         logger.exception("Fatal confirmation error")
-        return jsonify({
-            "ResultCode": 1,
-            "ResultDesc": "Processing error"
-        }), 200
+        return jsonify({"ResultCode": 1}), 200
