@@ -183,7 +183,7 @@ app.jinja_env.filters["to_nairobi"] = to_nairobi
 # -----------------------
 
 # IntaSend payments + webhooks
-app.register_blueprint(intasend_bp, url_prefix="/mpesa")
+app.register_blueprint(intasend_bp, url_prefix="/intasend")
 print("✅ Intasend Blueprint active at /mpesa")
 
 
