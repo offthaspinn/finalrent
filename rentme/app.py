@@ -47,10 +47,10 @@ import redis
 from flask import current_app, request, session, url_for, redirect
 
 # Local imports
-from rentme.extensions import db, mail, limiter
+from rentme.extensions import db, mail, limiter, socketio, csrf
 from rentme.config import Config
 from rentme.models import User, Tenant, Payment, AuditLog, Plan, Property, Subscription
-from rentme.mpesa_handler import mpesa_bp
+from rentme.intasend_handler import intasend_bp
 from rentme.landlord_settings import landlord_settings_bp
 from register_daraja_live import register_urls
 from rentme.forms import RegisterForm
@@ -66,7 +66,6 @@ from sqlalchemy import func
 from rentme.forms import ResetPasswordForm
 from rentme.routes.subscriptions import subscriptions_bp
 from flask_migrate import Migrate
-from rentme.payments.intasend_bp import intasend_bp
 from rentme.forms import CreatePropertyForm
 from pytz import timezone
 from rentme.subscriptions.utils import subscription_required
@@ -93,8 +92,6 @@ migrate = Migrate()
 app = Flask(__name__, static_folder="static", template_folder="templates")
 from rentme.routes import *
 
-if __name__ == "__main__":
-    app.run(debug=True)
 
 app.config.from_object(Config)
 
@@ -130,8 +127,8 @@ mail.init_app(app)
 limiter.init_app(app)
 migrate.init_app(app, db)
 csrf.init_app(app)
-csrf.exempt(mpesa_bp)
 csrf.exempt(intasend_bp)
+socketio.init_app(app)  # <-- important
 
 
 # -----------------------
@@ -181,16 +178,20 @@ def to_nairobi(dt):
 app.jinja_env.filters["to_nairobi"] = to_nairobi
 
 # -----------------------
+# -----------------------
 # Blueprints
 # -----------------------
-app.register_blueprint(mpesa_bp, url_prefix="/mpesa")
-print("✅ M-Pesa Blueprint active at /mpesa")
-app.register_blueprint(landlord_settings_bp, url_prefix="/settings")
 
+# IntaSend payments + webhooks
+app.register_blueprint(intasend_bp, url_prefix="/mpesa")
+print("✅ Intasend Blueprint active at /mpesa")
+
+
+# Subscription system (if you have this)
 app.register_blueprint(subscriptions_bp)
+print("✅ Subscriptions Blueprint active")
 
 
-app.register_blueprint(intasend_bp)
 
 
 # -----------------------
@@ -1392,25 +1393,26 @@ def payment_edit_redirect():
 # -----------------------
 # Landlord Settings Import
 # -----------------------
-
 try:
     from rentme.landlord_settings import landlord_settings_bp
+    app.register_blueprint(landlord_settings_bp)
 except ImportError as e:
-    app.logger.warning("Failed to import landlord_settings: %s", e)
+    app.logger.warning("⚠️ Failed to import landlord_settings: %s", e)
 
-    # -----------------------
-    # Run App (LOCAL DEV ONLY)
-    # -----------------------
+# -----------------------
+# Run App (LOCAL DEV ONLY)
+# -----------------------
+if __name__ == "__main__":
     import logging
-    import os
+    from rentme.extensions import socketio
 
+    # Configure logging
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[logging.StreamHandler()],
     )
 
-    logging.info(
-        "🚀 Rentana Flask app starting on port %s...",
-        os.getenv("PORT", 5000),
-    )
+    logging.info("🚀 Rentana Flask app starting on port 8000...")
+
+    # Run the app on port 8000
+    socketio.run(app, host="0.0.0.0", port=8000, debug=True)

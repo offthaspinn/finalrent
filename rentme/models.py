@@ -168,41 +168,56 @@ class LandlordSettings(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
-    payment_method = db.Column(db.String(50), nullable=True)
-
-    # Business receiving numbers
-    paybill_number = db.Column(db.String(32), nullable=True)
-    till_number = db.Column(db.String(32), nullable=True)
-    send_money_number = db.Column(db.String(32), nullable=True)
-    phone_number = db.Column(db.String(50), nullable=True)  # optional display phone
 
     # -----------------------------
-    # MPESA (Safaricom) Credentials
+    # PAYMENT PROVIDER (LOCKED)
+    # -----------------------------
+    payment_provider = db.Column(
+        db.String(30),
+        nullable=False,
+        default="INTASEND"   # INTASEND ONLY
+    )
+
+    # -----------------------------
+    # INTASEND (CORE)
+    # -----------------------------
+    intasend_customer_ref = db.Column(
+        db.String(100),
+        unique=True,
+        nullable=True,
+        index=True
+    )
+    intasend_wallet_id = db.Column(
+        db.String(100),
+        nullable=True
+    )
+
+    settlement_phone = db.Column(db.String(30), nullable=True)
+    settlement_bank_name = db.Column(db.String(100), nullable=True)
+    settlement_account = db.Column(db.String(50), nullable=True)
+
+    settlement_verified = db.Column(db.Boolean, default=False)
+
+    # -----------------------------
+    # LEGACY (DO NOT USE, KEEP SAFE)
     # -----------------------------
     mpesa_consumer_key = db.Column(db.String(255), nullable=True)
     mpesa_consumer_secret = db.Column(db.String(255), nullable=True)
-    mpesa_shortcode = db.Column(db.String(32), nullable=True)   # BusinessShortCode / Paybill/Till
+    mpesa_shortcode = db.Column(db.String(32), nullable=True)
     mpesa_passkey = db.Column(db.String(255), nullable=True)
-    mpesa_mode = db.Column(db.String(20), default="production", nullable=False)  # 'production' or 'sandbox'
-    callback_url = db.Column(db.String(512), nullable=True)  # optional per-landlord callback override
+    mpesa_mode = db.Column(db.String(20), default="production")
 
-    # -----------------------------
-    # KCB Paybill Credentials
-    # -----------------------------
     kcb_api_key = db.Column(db.String(255), nullable=True)
     kcb_paybill = db.Column(db.String(32), nullable=True)
-    kcb_env = db.Column(db.String(20), default="sandbox", nullable=False)  # 'sandbox' or 'production'
-    kcb_callback_url = db.Column(db.String(512), nullable=True)  # optional per-landlord callback
+    kcb_env = db.Column(db.String(20), default="sandbox")
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    # Relationship
     user = db.relationship("User", backref=db.backref("landlord_settings", uselist=False))
 
     def __repr__(self):
-        return f"<LandlordSettings user_id={self.user_id} mpesa_mode={self.mpesa_mode} kcb_env={self.kcb_env}>"
-
+        return f"<LandlordSettings user={self.user_id} provider=INTASEND verified={self.settlement_verified}>"
 
 # ==============================================================
 # TENANT MODEL (Each tenant belongs to a specific user)
@@ -302,6 +317,43 @@ class Tenant(db.Model):
             db.session.commit()
 
 
+class Invoice(db.Model):
+    __tablename__ = "invoice"
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    tenant_id = db.Column(
+        db.Integer,
+        db.ForeignKey("tenant.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    # Used inside IntaSend reference
+    reference_code = db.Column(
+        db.String(50),
+        unique=True,
+        nullable=False,
+        index=True,
+    )
+
+    amount_due = db.Column(db.Float, nullable=False)
+    amount_paid = db.Column(db.Float, default=0.0)
+
+    status = db.Column(
+        db.String(20),
+        default="UNPAID"   # UNPAID | PARTIAL | PAID
+    )
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    # relationship
+    tenant = db.relationship("Tenant", backref="invoices")
+
+    def __repr__(self):
+        return f"<Invoice {self.reference_code} status={self.status}>"
+
+
 # ==============================================================
 # PAYMENT MODEL
 # Used for SendMoney, Paybill, Till, and Daraja STK Push
@@ -309,27 +361,35 @@ class Tenant(db.Model):
 class Payment(db.Model):
     id = db.Column(db.Integer, primary_key=True)
 
+    provider = db.Column(
+        db.String(30),
+        nullable=False,
+        default="INTASEND"
+    )
+
     transaction_id = db.Column(db.String(100), unique=True, nullable=False)
+    reference = db.Column(db.String(120), index=True)
+
     amount = db.Column(db.Float, nullable=False)
+    currency = db.Column(db.String(10), default="KES")
+
+    status = db.Column(
+        db.String(20),
+        default="CONFIRMED"   # CONFIRMED | PARTIAL | FAILED
+    )
+
     paid_at = db.Column(db.DateTime, nullable=False)
     created_at = db.Column(db.DateTime, default=db.func.current_timestamp())
 
-    note = db.Column(db.String(255))
+    raw_payload = db.Column(db.JSON)
 
-    # Foreign Keys
-    tenant_id = db.Column(db.Integer, db.ForeignKey('tenant.id'))
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
-
-    # CheckoutRequestID for Daraja callbacks routing
-    checkout_request_id = db.Column(db.String(100), index=True, nullable=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"))
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"))
 
     def apply_payment(self):
-        """Reduce tenant’s amount_due when payment is made"""
         if self.tenant:
             self.tenant.amount_due = max(0.0, self.tenant.amount_due - self.amount)
             self.tenant.last_rent_update = date.today()
-            db.session.commit()
-
 
 
 # ==============================================================
@@ -535,5 +595,6 @@ class SubscriptionIntent(db.Model):
 
     user = db.relationship("User")
     plan = db.relationship("Plan")
+
 
     

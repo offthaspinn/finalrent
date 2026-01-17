@@ -23,7 +23,6 @@ def _deactivate_existing(user_id: int):
 
 # ----------------------------------------------------
 # PAID SUBSCRIPTION (Webhook-driven)
-# ----------------------------------------------------
 def activate_paid_subscription(intent: SubscriptionIntent) -> Subscription | None:
     """
     Finalizes a paid subscription intent into an active subscription.
@@ -31,10 +30,11 @@ def activate_paid_subscription(intent: SubscriptionIntent) -> Subscription | Non
     """
 
     # ------------------------------------
-    # Idempotency guard
+    # Idempotency guard (CORRECT)
     # ------------------------------------
-    if intent.status == "COMPLETE":
-        return None
+    existing = Subscription.query.filter_by(intent_id=intent.id).first()
+    if existing:
+        return existing
 
     plan = intent.plan or Plan.query.get(intent.plan_id)
     if not plan:
@@ -76,8 +76,6 @@ def activate_paid_subscription(intent: SubscriptionIntent) -> Subscription | Non
     db.session.commit()
 
     return subscription
-
-
 # ----------------------------------------------------
 # FREE TRIAL
 # ----------------------------------------------------

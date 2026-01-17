@@ -9,16 +9,12 @@ from rentme.models import Subscription
 
 
 def get_active_subscription(user):
-    """
-    Returns the user's active, non-expired subscription or None.
-    Automatically deactivates expired subscriptions.
-    """
     if not user or not user.is_authenticated:
         return None
 
     sub = (
         Subscription.query
-        .filter_by(user_id=user.id, is_active=True)
+        .filter_by(user_id=user.id)
         .order_by(Subscription.created_at.desc())
         .first()
     )
@@ -26,13 +22,20 @@ def get_active_subscription(user):
     if not sub:
         return None
 
-    # Defensive expiry check
-    if sub.expires_at and sub.expires_at < datetime.utcnow():
-        sub.is_active = False
-        db.session.commit()
-        return None
+    now = datetime.utcnow()
 
-    return sub
+    if sub.expires_at >= now:
+        return sub
+
+    if sub.grace_expires_at and sub.grace_expires_at >= now:
+        sub.is_grace = True
+        db.session.commit()
+        return sub
+
+    sub.is_active = False
+    sub.is_grace = False
+    db.session.commit()
+    return None
 
 
 def subscription_required(f):
