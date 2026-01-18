@@ -6,27 +6,18 @@ import requests
 import logging
 
 INTASEND_BASE_URL = "https://api.intasend.com/api/v1"
-INTASEND_SECRET_KEY = os.getenv("INTASEND_SECRET_KEY")
+INTASEND_PUBLIC_KEY = os.getenv("INTASEND_PUBLIC_KEY")  # ✅ FIX
 
 logger = logging.getLogger("intasend")
-
-# --------------------------------------------------
-# Create payment invoice
-# --------------------------------------------------
 
 def create_intasend_invoice(
     *,
     amount: float,
     reference: str,
-    phone: str | None = None,          # ✅ accept phone
+    phone: str | None = None,
     email: str | None = None,
     description: str = "Rent Payment",
 ):
-    """
-    Creates an IntaSend invoice and returns a payment URL.
-    This is the ONLY way tenants initiate payment.
-    """
-
     if amount <= 0:
         raise ValueError("Amount must be greater than zero")
 
@@ -38,7 +29,7 @@ def create_intasend_invoice(
     }
 
     if phone:
-        payload["phone_number"] = phone   # ✅ IntaSend expects phone_number
+        payload["phone_number"] = phone
 
     if email:
         payload["email"] = email
@@ -49,7 +40,7 @@ def create_intasend_invoice(
         f"{INTASEND_BASE_URL}/checkout/",
         json=payload,
         headers={
-            "Authorization": f"Bearer {INTASEND_SECRET_KEY}",
+            "Authorization": f"Bearer {INTASEND_PUBLIC_KEY}",  # ✅ FIX
             "Content-Type": "application/json",
         },
         timeout=20,
