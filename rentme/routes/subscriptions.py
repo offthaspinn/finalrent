@@ -28,7 +28,11 @@ subscriptions_bp = Blueprint("subscriptions", __name__, url_prefix="/subscriptio
 def list_plans():
     plans = Plan.query.order_by(Plan.price.asc()).all()
     form = SubscriptionForm()
-    return render_template("subscriptions/plans.html", plans=plans, form=form)
+    return render_template(
+        "subscriptions/plans.html",
+        plans=plans,
+        form=form,
+    )
 
 
 # ------------------------------------------------------------
@@ -44,8 +48,11 @@ def pay_plan(plan_id):
         return redirect(url_for("subscriptions.list_plans"))
 
     plan = Plan.query.get_or_404(plan_id)
-    phone = normalize_msisdn(form.phone.data)
+    phone_number = normalize_msisdn(form.phone.data)
 
+    # --------------------------------------------------------
+    # Create payment intent
+    # --------------------------------------------------------
     try:
         intent = SubscriptionIntent(
             user_id=current_user.id,
@@ -59,23 +66,27 @@ def pay_plan(plan_id):
         db.session.commit()
     except Exception:
         db.session.rollback()
-        current_app.logger.exception("Intent creation failed")
+        current_app.logger.exception("❌ SubscriptionIntent creation failed")
         flash("Unable to start payment.", "danger")
         return redirect(url_for("subscriptions.list_plans"))
 
-    response = create_intasend_invoice(
-        amount=plan.price,
-        phone=phone,
-        email=current_user.email,
-        api_ref=intent.reference,   # ✅ FIXED
-        redirect_url=url_for(
-            "subscriptions.payment_status",
-            _external=True,
-        ),
-        description=f"{plan.name} subscription",
-    )
+    # --------------------------------------------------------
+    # Create IntaSend invoice (ONLY supported params)
+    # --------------------------------------------------------
+    try:
+        response = create_intasend_invoice(
+            amount=plan.price,
+            reference=intent.reference,
+            phone_number=phone_number,
+            email=current_user.email,
+            description=f"{plan.name} subscription",
+        )
+    except Exception:
+        current_app.logger.exception("❌ IntaSend invoice creation failed")
+        flash("Payment initialization failed.", "danger")
+        return redirect(url_for("subscriptions.list_plans"))
 
-    checkout_url = response.get("url") or response.get("checkout_url")
+    checkout_url = response.get("payment_url")
     if not checkout_url:
         flash("Payment initialization failed.", "danger")
         return redirect(url_for("subscriptions.list_plans"))

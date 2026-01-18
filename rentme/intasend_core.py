@@ -18,7 +18,7 @@ def create_intasend_invoice(
     *,
     amount: float,
     reference: str,
-    phone_number: str | None = None,
+    phone: str | None = None,          # ✅ accept phone
     email: str | None = None,
     description: str = "Rent Payment",
 ):
@@ -37,8 +37,8 @@ def create_intasend_invoice(
         "description": description,
     }
 
-    if phone_number:
-        payload["phone_number"] = phone_number
+    if phone:
+        payload["phone_number"] = phone   # ✅ IntaSend expects phone_number
 
     if email:
         payload["email"] = email
