@@ -6,6 +6,8 @@ from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import Column, DateTime
 from rentme.extensions import db 
+from rentme.utils import generate_property_ref, generate_unit_reference
+from sqlalchemy import event
 
 
 class JobLock(db.Model):
@@ -43,7 +45,6 @@ class MpesaCredential(db.Model):
 # ==============================================================
 # USER MODEL (Each user has own tenants + own MPESA credentials)
 # ==============================================================
-
 class User(db.Model, UserMixin):
     __tablename__ = "user"
 
@@ -62,44 +63,33 @@ class User(db.Model, UserMixin):
     last_logout = db.Column(db.DateTime, default=datetime.utcnow)
 
     # -------------------------
-    # PAYMENT METHOD
-    # -------------------------
-    payment_method = db.Column(db.String(50), nullable=True)
-    phone_number = db.Column(db.String(20), nullable=True)
-    paybill_number = db.Column(db.String(30), nullable=True)
-    till_number = db.Column(db.String(30), nullable=True)
-
-    # -------------------------
-    # MPESA CREDENTIALS
-    # -------------------------
-    mpesa_consumer_key = db.Column(db.String(200), nullable=True)
-    mpesa_consumer_secret = db.Column(db.String(200), nullable=True)
-    mpesa_passkey = db.Column(db.String(200), nullable=True)
-    mpesa_shortcode = db.Column(db.String(20), nullable=True)
-    mpesa_env = db.Column(db.String(20), default="sandbox")
-    mpesa_callback_url = db.Column(db.String(500), nullable=True)
-
-    # -------------------------
     # Password reset
     # -------------------------
     reset_code = db.Column(db.String(10), nullable=True)
     reset_code_expires_at = db.Column(db.DateTime, nullable=True)
 
     # -------------------------
-    # Relationships (✅ FIXED)
+    # Relationships
     # -------------------------
     properties = db.relationship(
         "Property",
-        back_populates="owner",
+        back_populates="landlord",
         cascade="all, delete-orphan",
-        lazy="dynamic"
+        lazy="dynamic",
     )
 
     subscriptions = db.relationship(
         "Subscription",
         back_populates="user",
         cascade="all, delete-orphan",
-        lazy="dynamic"
+        lazy="dynamic",
+    )
+
+    landlord_settings = db.relationship(
+        "LandlordSettings",
+        uselist=False,
+        backref="user",
+        cascade="all, delete-orphan",
     )
 
     # -------------------------
@@ -115,11 +105,6 @@ class User(db.Model, UserMixin):
     # SUBSCRIPTION HELPERS
     # =========================
     def active_subscription(self):
-        """
-        Returns active subscription.
-        Supports grace periods.
-        Automatically deactivates expired ones.
-        """
         from rentme.models import Subscription
 
         now = datetime.utcnow()
@@ -134,18 +119,15 @@ class User(db.Model, UserMixin):
         if not sub:
             return None
 
-        # ✅ Fully active
-        if sub.expires_at >= now:
+        if sub.expires_at and sub.expires_at >= now:
             sub.is_grace = False
             return sub
 
-        # 🟡 Grace period
         if sub.grace_expires_at and sub.grace_expires_at >= now:
             sub.is_grace = True
             db.session.commit()
             return sub
 
-        # ❌ Fully expired
         sub.is_active = False
         sub.is_grace = False
         db.session.commit()
@@ -164,68 +146,37 @@ class User(db.Model, UserMixin):
         return f"<User {self.email} | admin={self.is_admin}>"
 
 class LandlordSettings(db.Model):
-    __tablename__ = "landlord_settings"
-
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), unique=True)
 
-    # -----------------------------
-    # PAYMENT PROVIDER (LOCKED)
-    # -----------------------------
-    payment_provider = db.Column(
-        db.String(30),
-        nullable=False,
-        default="INTASEND"   # INTASEND ONLY
-    )
+    # Display only (IntaSend-owned)
+    master_paybill = db.Column(db.String(50), nullable=True)
+    master_account_format = db.Column(db.String(50), nullable=True)
 
-    # -----------------------------
-    # INTASEND (CORE)
-    # -----------------------------
-    intasend_customer_ref = db.Column(
-        db.String(100),
-        unique=True,
-        nullable=True,
-        index=True
-    )
-    intasend_wallet_id = db.Column(
-        db.String(100),
-        nullable=True
-    )
-
-    settlement_phone = db.Column(db.String(30), nullable=True)
-    settlement_bank_name = db.Column(db.String(100), nullable=True)
-    settlement_account = db.Column(db.String(50), nullable=True)
-
-    settlement_verified = db.Column(db.Boolean, default=False)
-
-    # -----------------------------
-    # LEGACY (DO NOT USE, KEEP SAFE)
-    # -----------------------------
-    mpesa_consumer_key = db.Column(db.String(255), nullable=True)
-    mpesa_consumer_secret = db.Column(db.String(255), nullable=True)
-    mpesa_shortcode = db.Column(db.String(32), nullable=True)
-    mpesa_passkey = db.Column(db.String(255), nullable=True)
-    mpesa_mode = db.Column(db.String(20), default="production")
-
-    kcb_api_key = db.Column(db.String(255), nullable=True)
-    kcb_paybill = db.Column(db.String(32), nullable=True)
-    kcb_env = db.Column(db.String(20), default="sandbox")
+    # Payout (used later)
+    bank_name = db.Column(db.String(100), nullable=True)
+    bank_account_name = db.Column(db.String(100), nullable=True)
+    bank_account_number = db.Column(db.String(50), nullable=True)
+    bank_branch = db.Column(db.String(100), nullable=True)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    user = db.relationship("User", backref=db.backref("landlord_settings", uselist=False))
+class RentLedger(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
 
-    def __repr__(self):
-        return f"<LandlordSettings user={self.user_id} provider=INTASEND verified={self.settlement_verified}>"
+    landlord_id = db.Column(db.Integer, nullable=False)
+    property_id = db.Column(db.Integer, nullable=False)
+    unit_id = db.Column(db.Integer, nullable=False)
+    tenant_id = db.Column(db.Integer, nullable=True)
 
-# ==============================================================
-# TENANT MODEL (Each tenant belongs to a specific user)
-# ==============================================================
+    amount = db.Column(db.Numeric(10, 2))
+    currency = db.Column(db.String(10), default="KES")
 
-from datetime import datetime, date
-from dateutil.relativedelta import relativedelta
-from rentme.extensions import db
+    intasend_invoice_id = db.Column(db.String(50))
+    intasend_ref = db.Column(db.String(50))
+
+    status = db.Column(db.String(20))  # COMPLETE, FAILED
+    paid_at = db.Column(db.DateTime)
 
 
 class Tenant(db.Model):
@@ -434,38 +385,62 @@ def auto_update_all_unpaid_rents():
     return updated
 
 #Properties
-
 class Property(db.Model):
     __tablename__ = "property"
 
     id = db.Column(db.Integer, primary_key=True)
 
-    owner_id = db.Column(
+    landlord_id = db.Column(
         db.Integer,
-        db.ForeignKey("user.id", ondelete="CASCADE"),
+        db.ForeignKey("user.id"),
         nullable=False
     )
 
-    name = db.Column(db.String(120), nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    name = db.Column(db.String(150), nullable=False)
 
-    # -------------------------
-    # Relationships
-    # -------------------------
-    owner = db.relationship(
+    reference = db.Column(db.String(10), unique=True, nullable=False)
+
+    # ✅ REQUIRED relationship (this was missing)
+    landlord = db.relationship(
         "User",
         back_populates="properties"
     )
 
-    tenants = db.relationship(
-        "Tenant",
-        backref="property",
-        cascade="all, delete-orphan",
-        passive_deletes=True
+    units = db.relationship(
+        "Unit",
+        back_populates="property",
+        cascade="all, delete-orphan"
     )
 
     def __repr__(self):
-        return f"<Property {self.id} owner={self.owner_id}>"
+        return f"<Property {self.name} ({self.reference})>"
+
+
+from rentme.extensions import db
+
+
+class Unit(db.Model):
+    __tablename__ = "unit"
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    property_id = db.Column(
+        db.Integer,
+        db.ForeignKey("property.id"),
+        nullable=False
+    )
+
+    house_no = db.Column(db.String(20), nullable=False)
+
+    payment_ref = db.Column(db.String(50), unique=True, nullable=True)
+
+    property = db.relationship(
+        "Property",
+        back_populates="units"
+    )
+
+    def __repr__(self):
+        return f"<Unit {self.house_no} | {self.payment_ref}>"
 
 
 class Subscription(db.Model):
@@ -598,3 +573,24 @@ class SubscriptionIntent(db.Model):
 
 
     
+
+@event.listens_for(Property, "before_insert")
+def set_property_reference(mapper, connection, target):
+    if not target.reference:
+        target.reference = generate_property_ref()
+
+@event.listens_for(Unit, "before_insert")
+def set_unit_payment_ref(mapper, connection, target):
+    if target.payment_ref:
+        return
+
+    # 🔒 Fetch property reference safely
+    property_ref = connection.execute(
+        db.select(Property.reference)
+        .where(Property.id == target.property_id)
+    ).scalar_one()
+
+    target.payment_ref = generate_unit_reference(
+        property_ref,
+        target.house_no
+    )

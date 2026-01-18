@@ -1,146 +1,61 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="container mt-5">
-    <h2>Payment & API Settings</h2>
-    <hr>
 
-    {% with messages = get_flashed_messages(with_categories=true) %}
-      {% if messages %}
-        {% for category, msg in messages %}
-          <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
-            {{ msg }}
-            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-          </div>
-        {% endfor %}
-      {% endif %}
-    {% endwith %}
+<h3>How Tenants Pay Rent</h3>
 
-    <form method="POST" class="mt-3" autocomplete="off" autocapitalize="off" spellcheck="false" novalidate>
-        {{ form.hidden_tag() }}
-
-        <!-- --------------------------- -->
-        <!-- MPesa / Safaricom Settings -->
-        <!-- --------------------------- -->
-        <h4>MPesa Settings</h4>
-        <div class="mb-3">
-            <label for="payment_method" class="form-label">Payment Method</label>
-            {{ form.payment_method(class="form-control") }}
-        </div>
-
-        <div class="mb-3">
-            <label for="paybill_number" class="form-label">Paybill Number</label>
-            {{ form.paybill_number(class="form-control") }}
-        </div>
-
-        <div class="mb-3">
-            <label for="till_number" class="form-label">Till / BuyGoods Number</label>
-            {{ form.till_number(class="form-control") }}
-        </div>
-
-        <div class="mb-3">
-            <label for="send_money_number" class="form-label">Send Money Receiver (phone)</label>
-            {{ form.send_money_number(class="form-control") }}
-        </div>
-
-        <div class="mb-3">
-            <label for="phone_number" class="form-label">Display Phone (optional)</label>
-            {{ form.phone_number(class="form-control") }}
-        </div>
-
-        <div class="mb-3">
-            <label for="mpesa_consumer_key" class="form-label">Daraja: Consumer Key</label>
-            {{ form.mpesa_consumer_key(class="form-control") }}
-        </div>
-
-        <div class="mb-3">
-            <label for="mpesa_consumer_secret" class="form-label">Daraja: Consumer Secret</label>
-            {{ form.mpesa_consumer_secret(class="form-control") }}
-        </div>
-
-        <div class="mb-3">
-            <label for="mpesa_shortcode" class="form-label">BusinessShortCode / Shortcode</label>
-            {{ form.mpesa_shortcode(class="form-control") }}
-        </div>
-
-        <div class="mb-3">
-            <label for="mpesa_passkey" class="form-label">Daraja: Passkey</label>
-            {{ form.mpesa_passkey(class="form-control") }}
-        </div>
-
-        <div class="mb-3">
-            <label for="mpesa_mode" class="form-label">Daraja Mode</label>
-            {{ form.mpesa_mode(class="form-control") }}
-        </div>
-
-        <div class="mb-3">
-            <label for="callback_url" class="form-label">Callback URL (optional)</label>
-            {{ form.callback_url(class="form-control") }}
-        </div>
-
-        <button type="button" class="btn btn-secondary mb-3" id="test-mpesa-btn">
-            Test MPesa Credentials
-        </button>
-
-        <hr>
-
-        <!-- --------------------------- -->
-        <!-- KCB Settings -->
-        <!-- --------------------------- -->
-        <h4>KCB Paybill Settings</h4>
-
-        <div class="mb-3">
-            <label for="kcb_paybill" class="form-label">KCB Paybill</label>
-            {{ form.kcb_paybill(class="form-control") }}
-        </div>
-
-        <div class="mb-3">
-            <label for="kcb_api_key" class="form-label">KCB API Key</label>
-            {{ form.kcb_api_key(class="form-control") }}
-        </div>
-
-        <div class="mb-3">
-            <label for="kcb_callback_url" class="form-label">KCB Callback URL</label>
-            {{ form.kcb_callback_url(class="form-control") }}
-        </div>
-
-        <div class="mb-3">
-            <label for="kcb_env" class="form-label">KCB Environment</label>
-            {{ form.kcb_env(class="form-control") }}
-        </div>
-
-        <button type="button" class="btn btn-secondary mb-3" id="test-kcb-btn">
-            Test KCB Credentials
-        </button>
-
-        <hr>
-
-        <button type="submit" class="btn btn-primary">{{ form.submit.label.text }}</button>
-    </form>
+<div class="alert alert-info">
+  <strong>Paybill:</strong> {{ settings.master_paybill }} <br>
+  <strong>Account Number Format:</strong> {{ settings.master_account_format }}
 </div>
 
-<!-- --------------------------- -->
-<!-- JS for Testing Credentials -->
-<!-- --------------------------- -->
-<script>
-document.getElementById("test-mpesa-btn").addEventListener("click", async () => {
-  const resp = await fetch("{{ url_for('landlord_settings.test_payment') }}", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ provider: "mpesa" })
-  });
-  const data = await resp.json();
-  alert(data.msg || "MPesa test finished.");
-});
+<table class="table table-bordered">
+  <thead>
+    <tr>
+      <th>Property</th>
+      <th>Unit</th>
+      <th>Payment Reference</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for property in properties %}
+      {% for unit in property.units %}
+      <tr>
+        <td>{{ property.name }}</td>
+        <td>{{ unit.name }}</td>
+        <td>
+          <code>{{ property.reference }}-{{ unit.reference }}</code>
+        </td>
+      </tr>
+      {% endfor %}
+    {% endfor %}
+  </tbody>
+</table>
 
-document.getElementById("test-kcb-btn").addEventListener("click", async () => {
-  const resp = await fetch("{{ url_for('landlord_settings.test_payment') }}", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ provider: "kcb" })
-  });
-  const data = await resp.json();
-  alert(data.msg || "KCB test finished.");
-});
-</script>
+<hr>
+
+<h3>Landlord Payout (Bank)</h3>
+
+<form method="POST">
+  {{ form.hidden_tag() }}
+
+  <div class="mb-2">
+    {{ form.bank_name(class="form-control", placeholder="Bank Name") }}
+  </div>
+
+  <div class="mb-2">
+    {{ form.bank_account_name(class="form-control", placeholder="Account Name") }}
+  </div>
+
+  <div class="mb-2">
+    {{ form.bank_account_number(class="form-control", placeholder="Account Number") }}
+  </div>
+
+  <div class="mb-2">
+    {{ form.bank_branch(class="form-control", placeholder="Branch") }}
+  </div>
+
+  {{ form.submit(class="btn btn-primary") }}
+</form>
+
 {% endblock %}

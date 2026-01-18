@@ -14,7 +14,7 @@ from uuid import uuid4
 from rentme.models import Plan, Subscription, SubscriptionIntent
 from rentme.forms import SubscriptionForm
 from rentme.utils import normalize_msisdn
-from rentme.payments.intasend_core import create_intasend_payment
+from rentme.intasend_core import create_intasend_invoice
 from rentme.extensions import db
 
 subscriptions_bp = Blueprint("subscriptions", __name__, url_prefix="/subscriptions")
@@ -63,7 +63,7 @@ def pay_plan(plan_id):
         flash("Unable to start payment.", "danger")
         return redirect(url_for("subscriptions.list_plans"))
 
-    response = create_intasend_payment(
+    response = create_intasend_invoice(
         amount=plan.price,
         phone=phone,
         email=current_user.email,

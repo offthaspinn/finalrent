@@ -299,7 +299,7 @@ button:active {
     <!-- Settings -->
     <div class="nav-item-btn">
       <a class="nav-btn {% if request.endpoint=='landlord_settings.settings_payment' %}active{% endif %}" 
-        href="{{ url_for('landlord_settings.settings_payment') }}">
+        href="{{ url_for('landlord_settings_bp.payment_settings') }}">
 
         <i class="bi bi-gear-fill"></i>
         <span class="d-none d-sm-block">Settings_</span>

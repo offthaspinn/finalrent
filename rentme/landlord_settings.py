@@ -11,148 +11,49 @@ from .forms import PaymentSettingsForm
 from .security.crypto import encrypt, decrypt
 
 # -------------------------------------------------
-# BLUEPRINT
 # -------------------------------------------------
-landlord_settings_bp = Blueprint("landlord_settings", __name__, url_prefix="/landlord")
+# BLUEPRINT (updated unique name)
+# -------------------------------------------------
+landlord_settings_bp = Blueprint("landlord_settings_bp", __name__, url_prefix="/landlord")
 
 # -------------------------------------------------
 # Helper: get or create the landlord's settings row
 # -------------------------------------------------
 def get_or_create_settings():
     s = LandlordSettings.query.filter_by(user_id=current_user.id).first()
+
     if not s:
-        s = LandlordSettings(user_id=current_user.id)
+        s = LandlordSettings(
+            user_id=current_user.id,
+            master_paybill="INTASEND",
+            master_account_format="PR-XXXX-U-XX",
+        )
         db.session.add(s)
         db.session.commit()
+
     return s
 
 # -------------------------------------------------
 # SETTINGS PAGE — GET + POST
-# -------------------------------------------------
 @landlord_settings_bp.route("/payment", methods=["GET", "POST"])
 @login_required
-def settings_payment():
-    """Render and save per-landlord MPesa & KCB payment options."""
-
-    # Only landlords allowed
-    if not getattr(current_user, "is_landlord", True):
-        flash("Access denied.", "danger")
-        return redirect(url_for("dashboard"))
-
+def payment_settings():
     settings = get_or_create_settings()
-    form = PaymentSettingsForm()
+    form = PaymentSettingsForm(obj=settings)
 
     if form.validate_on_submit():
-        # ----------------------------
-        # Payment method fields
-        # ----------------------------
-        settings.payment_method = form.payment_method.data or settings.payment_method
-        settings.paybill_number = form.paybill_number.data or None
-        settings.till_number = form.till_number.data or None
-        settings.send_money_number = form.send_money_number.data or None
-        settings.phone_number = form.phone_number.data or settings.phone_number
-
-        # ----------------------------
-        # Safaricom MPESA API credentials
-        # ----------------------------
-        if form.mpesa_consumer_key.data:
-            settings.mpesa_consumer_key = encrypt(form.mpesa_consumer_key.data)
-        if form.mpesa_consumer_secret.data:
-            settings.mpesa_consumer_secret = encrypt(form.mpesa_consumer_secret.data)
-        if form.mpesa_passkey.data:
-            settings.mpesa_passkey = encrypt(form.mpesa_passkey.data)
-        if form.mpesa_shortcode.data:
-            settings.mpesa_shortcode = form.mpesa_shortcode.data
-        if form.callback_url.data:
-            settings.callback_url = form.callback_url.data
-        settings.mpesa_mode = form.mpesa_mode.data or "production"
-
-        # ----------------------------
-        # KCB Paybill API credentials
-        # ----------------------------
-        if form.kcb_api_key.data:
-            settings.kcb_api_key = encrypt(form.kcb_api_key.data)
-        if form.kcb_paybill.data:
-            settings.kcb_paybill = form.kcb_paybill.data
-        if form.kcb_callback_url.data:
-            settings.kcb_callback_url = form.kcb_callback_url.data
-        settings.kcb_env = form.kcb_env.data or "sandbox"
+        settings.bank_name = form.bank_name.data
+        settings.bank_account_name = form.bank_account_name.data
+        settings.bank_account_number = form.bank_account_number.data
+        settings.bank_branch = form.bank_branch.data
 
         db.session.commit()
-        flash("✅ Payment & API settings saved.", "success")
-        return redirect(url_for("landlord_settings.settings_payment"))
+        flash("Payout settings updated", "success")
+        return redirect(url_for("landlord_settings_bp.payment_settings"))
 
-    # Pre-fill form with existing settings
-    form.payment_method.data = settings.payment_method
-    form.paybill_number.data = settings.paybill_number
-    form.till_number.data = settings.till_number
-    form.send_money_number.data = settings.send_money_number
-    form.phone_number.data = settings.phone_number
-    form.mpesa_consumer_key.data = settings.mpesa_consumer_key
-    form.mpesa_consumer_secret.data = settings.mpesa_consumer_secret
-    form.mpesa_shortcode.data = settings.mpesa_shortcode
-    form.mpesa_passkey.data = settings.mpesa_passkey
-    form.mpesa_mode.data = settings.mpesa_mode
-    form.callback_url.data = settings.callback_url
-    form.kcb_api_key.data = settings.kcb_api_key
-    form.kcb_paybill.data = settings.kcb_paybill
-    form.kcb_callback_url.data = settings.kcb_callback_url
-    form.kcb_env.data = settings.kcb_env
-
-    return render_template("settings_payment.html", settings=settings, form=form)
-
-# -------------------------------------------------
-# TEST PAYMENT CREDENTIALS
-# -------------------------------------------------
-@landlord_settings_bp.route("/settings/payment/test", methods=["POST"])
-@login_required
-def test_payment():
-    """Test stored credentials for either MPesa or KCB."""
-
-    settings = get_or_create_settings()
-    body = request.get_json(silent=True) or {}
-    provider = (body.get("provider") or "mpesa").lower()
-
-    if provider == "mpesa":
-        mode = (body.get("mode") or request.form.get("mode") or settings.mpesa_mode or "production").lower()
-        try:
-            consumer_key = decrypt(settings.mpesa_consumer_key)
-            consumer_secret = decrypt(settings.mpesa_consumer_secret)
-        except Exception:
-            return jsonify({"ok": False, "msg": "MPesa credentials corrupted"}), 500
-        if not consumer_key or not consumer_secret:
-            return jsonify({"ok": False, "msg": "Missing MPesa Consumer Key/Secret"}), 400
-        auth_url = (
-            "https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials"
-            if mode == "production"
-            else "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials"
-        )
-        try:
-            r = requests.get(auth_url, auth=(consumer_key, consumer_secret), timeout=10)
-            if r.status_code not in (200, 201):
-                return jsonify({"ok": False, "msg": "OAuth failed", "status": r.status_code}), 400
-            data = r.json()
-            token = data.get("access_token")
-            return jsonify({"ok": True, "msg": "MPesa credentials valid ✔️", "token_sample": f"{token[:8]}..." if token else None, "environment": mode})
-        except requests.RequestException:
-            return jsonify({"ok": False, "msg": "Network error contacting MPesa"}), 502
-
-    elif provider == "kcb":
-        env = (body.get("env") or request.form.get("env") or settings.kcb_env or "sandbox").lower()
-        try:
-            api_key = decrypt(settings.kcb_api_key)
-        except Exception:
-            return jsonify({"ok": False, "msg": "KCB credentials corrupted"}), 500
-        if not api_key:
-            return jsonify({"ok": False, "msg": "Missing KCB API Key"}), 400
-        # Simple API test request
-        test_url = settings.kcb_callback_url or "https://sandbox.kcbgroup.com/mpesa"
-        try:
-            r = requests.get(test_url, headers={"Authorization": f"Bearer {api_key}"}, timeout=10)
-            if r.status_code in (200, 201):
-                return jsonify({"ok": True, "msg": "KCB credentials valid ✔️", "environment": env})
-            return jsonify({"ok": False, "msg": "KCB test request failed", "status": r.status_code}), 400
-        except requests.RequestException:
-            return jsonify({"ok": False, "msg": "Network error contacting KCB"}), 502
-
-    return jsonify({"ok": False, "msg": "Unknown provider"}), 400
+    return render_template(
+        "settings_payment.html",
+        form=form,
+        settings=settings,   # for read-only master paybill display
+        properties=current_user.properties,
+    )

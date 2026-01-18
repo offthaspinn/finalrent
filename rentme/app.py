@@ -49,13 +49,12 @@ from flask import current_app, request, session, url_for, redirect
 # Local imports
 from rentme.extensions import db, mail, limiter, socketio, csrf
 from rentme.config import Config
-from rentme.models import User, Tenant, Payment, AuditLog, Plan, Property, Subscription
+from rentme.models import User, Tenant, Payment, AuditLog, Plan, Property, Subscription, Unit
 from rentme.intasend_handler import intasend_bp
 from rentme.landlord_settings import landlord_settings_bp
 from register_daraja_live import register_urls
 from rentme.forms import RegisterForm
 from rentme.forms import ForgotPasswordForm
-from rentme.utils import send_sms_via_africastalking, send_reset_email, normalize_msisdn
 from rentme.forms import TenantForm
 from wtforms.validators import ValidationError
 from flask_wtf.csrf import validate_csrf
@@ -69,6 +68,13 @@ from flask_migrate import Migrate
 from rentme.forms import CreatePropertyForm
 from pytz import timezone
 from rentme.subscriptions.utils import subscription_required
+from rentme.utils.references import generate_property_ref
+from rentme.utils.email import send_reset_email
+from rentme.utils.sms import send_sms_via_africastalking, send_sms_via_twilio
+from rentme.utils.phones import normalize_msisdn
+from rentme.utils.tokens import generate_reset_token, verify_reset_token
+from rentme.utils.security import mask_secret
+from rentme.utils.references import generate_property_ref, generate_unit_reference
 
 
 
@@ -447,6 +453,7 @@ def enforce_property_and_subscription():
     return
 
 # ======================================================
+# ======================================================
 # 🏠 PROPERTIES
 # ======================================================
 @app.route("/properties")
@@ -455,7 +462,7 @@ def enforce_property_and_subscription():
 def select_property():
     properties = (
         Property.query
-        .filter_by(owner_id=current_user.id)
+        .filter_by(landlord_id=current_user.id)
         .order_by(Property.id.asc())
         .all()
     )
@@ -476,7 +483,7 @@ def select_property():
 def activate_property(property_id):
     prop = Property.query.filter_by(
         id=property_id,
-        owner_id=current_user.id
+        landlord_id=current_user.id
     ).first_or_404()
 
     session["active_property_id"] = prop.id
@@ -493,22 +500,19 @@ def activate_property(property_id):
 def create_property():
     form = CreatePropertyForm()
 
-    # Hard gate — never trust UI
     if not current_user.can_create_property():
         flash("Your plan does not allow you to add another property.", "warning")
         return redirect(url_for("subscriptions.list_plans"))
 
     if form.validate_on_submit():
-        name = form.name.data.strip()
-        password = form.password.data
-
-        if not current_user.check_password(password):
+        if not current_user.check_password(form.password.data):
             flash("Incorrect password.", "danger")
             return redirect(url_for("select_property"))
 
         prop = Property(
-            owner_id=current_user.id,
-            name=name
+            landlord_id=current_user.id,
+            name=form.name.data.strip(),
+            reference=generate_property_ref()   # 🔑 TG, AB, etc
         )
 
         try:
@@ -521,12 +525,47 @@ def create_property():
             return redirect(url_for("select_property"))
 
         session["active_property_id"] = prop.id
-        audit(current_user, "property_created", f"id:{prop.id}")
+        audit(current_user, "property_created", f"property_id={prop.id}")
         flash("Property created successfully!", "success")
         return redirect(url_for("dashboard"))
 
     return render_template("create_property.html", form=form)
 
+
+
+
+#UNITS'''''''''''''''''''''''''''''''''''''''''''''''''
+@app.route("/units/create/<int:property_id>", methods=["POST"])
+@login_required
+def create_unit(property_id):
+    property_obj = Property.query.filter_by(
+        id=property_id,
+        landlord_id=current_user.id
+    ).first_or_404()
+
+    form = UnitForm()
+    if not form.validate_on_submit():
+        return redirect(url_for("view_property", property_id=property_id))
+
+    unit_no = form.unit_number.data.strip()
+    payment_ref = generate_unit_reference(property_obj.reference, unit_no)  # 🔑 TG3
+
+    # HARD SAFETY
+    if Unit.query.filter_by(payment_ref=payment_ref).first():
+        flash("This unit reference already exists.", "danger")
+        return redirect(url_for("view_property", property_id=property_id))
+
+    unit = Unit(
+        property_id=property_obj.id,
+        unit_number=unit_no,
+        payment_ref=payment_ref
+    )
+
+    db.session.add(unit)
+    db.session.commit()
+
+    flash(f"Unit created. Tenants pay using account {payment_ref}", "success")
+    return redirect(url_for("view_property", property_id=property_id))
 
 @app.route("/logout")
 @login_required
@@ -680,12 +719,14 @@ def health_check():
 # ======================================================
 
 NAIROBI_TZ = timezone("Africa/Nairobi")
+from rentme.services.ledger import get_landlord_ledger_summary
 
 
 @app.route("/")
 @login_required
 @subscription_required
 def dashboard():
+    ledger = get_landlord_ledger_summary(current_user.id)
     """
     Render landlord dashboard UI.
     Actual data is loaded via /dashboard_data
@@ -694,7 +735,8 @@ def dashboard():
     if "active_property_id" not in session:
         return redirect(url_for("select_property"))
 
-    return render_template("dashboard.html")
+     
+    return render_template("dashboard.html", ledger=ledger)
 
 
 @app.route("/dashboard_data")

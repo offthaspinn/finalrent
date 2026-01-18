@@ -125,112 +125,38 @@ class TenantForm(FlaskForm):
 
 # ======================================================
 # ======================================================
-# 💳 LANDLORD MPESA + KCB / PAYMENT SETTINGS
+# 💳 LANDLORD MPESA 
 # ======================================================
 class PaymentSettingsForm(FlaskForm):
     # ----------------------------
-    # MPesa Fields
+    # Payment Display / Routing
     # ----------------------------
     payment_method = SelectField(
         "Payment Method",
         choices=[
             ("", "Select"),
-            ("Paybill", "Paybill (C2B)"),
+            ("Paybill", "Paybill"),
             ("Till", "Till / BuyGoods"),
-            ("Send Money", "Send Money (P2P)"),
+            ("SendMoney", "Send Money"),
         ],
         validators=[Optional()],
-        render_kw={"autocomplete": "off"},
-    )
-
-    paybill_number = StringField(
-        "Paybill Number", validators=[Optional()], render_kw={"autocomplete": "off"}
-    )
-
-    till_number = StringField(
-        "Till / BuyGoods Number",
-        validators=[Optional()],
-        render_kw={"autocomplete": "off"},
-    )
-
-    send_money_number = StringField(
-        "Send Money Receiver (phone)",
-        validators=[Optional()],
-        render_kw={"autocomplete": "off", "inputmode": "tel"},
     )
 
     phone_number = StringField(
         "Display Phone (optional)",
         validators=[Optional()],
-        render_kw={"autocomplete": "off"},
-    )
-
-    mpesa_consumer_key = StringField(
-        "Daraja: Consumer Key",
-        validators=[Optional()],
-        render_kw={"autocomplete": "off"},
-    )
-
-    mpesa_consumer_secret = PasswordField(
-        "Daraja: Consumer Secret",
-        validators=[Optional()],
-        render_kw={"autocomplete": "new-password"},
-    )
-
-    mpesa_shortcode = StringField(
-        "BusinessShortCode / Shortcode",
-        validators=[Optional()],
-        render_kw={"autocomplete": "off"},
-    )
-
-    mpesa_passkey = PasswordField(
-        "Daraja: Passkey",
-        validators=[Optional()],
-        render_kw={"autocomplete": "new-password"},
-    )
-
-    mpesa_mode = SelectField(
-        "Daraja Mode",
-        choices=[("production", "Production"), ("sandbox", "Sandbox")],
-        validators=[Optional()],
-        render_kw={"autocomplete": "off"},
-    )
-
-    callback_url = StringField(
-        "MPesa Callback URL (optional)",
-        validators=[Optional()],
-        render_kw={"autocomplete": "off"},
     )
 
     # ----------------------------
-    # KCB Fields
+    # Bank Payout (optional)
     # ----------------------------
-    kcb_api_key = StringField(
-        "KCB API Key",
-        validators=[Optional()],
-        render_kw={"autocomplete": "off"},
-    )
-
-    kcb_paybill = StringField(
-        "KCB Paybill",
-        validators=[Optional()],
-        render_kw={"autocomplete": "off"},
-    )
-
-    kcb_env = SelectField(
-        "KCB Mode",
-        choices=[("sandbox", "Sandbox"), ("live", "Live")],
-        validators=[Optional()],
-        render_kw={"autocomplete": "off"},
-    )
-
-    kcb_callback_url = StringField(
-        "KCB Callback URL (optional)",
-        validators=[Optional()],
-        render_kw={"autocomplete": "off"},
-    )
+    bank_name = StringField("Bank Name", validators=[Optional()])
+    bank_account_name = StringField("Account Name", validators=[Optional()])
+    bank_account_number = StringField("Account Number", validators=[Optional()])
+    bank_branch = StringField("Branch", validators=[Optional()])
 
     submit = SubmitField("Save Settings")
+
 
 # 🔐 RESET PASSWORD
 # ======================================================
