@@ -77,7 +77,7 @@ def pay_plan(plan_id):
         response = create_intasend_invoice(
             amount=plan.price,
             reference=intent.reference,
-            phone_number=phone_number,
+            phone=phone_number,
             email=current_user.email,
             description=f"{plan.name} subscription",
         )
