@@ -1,13 +1,10 @@
-# intasend_handler.py — MERGED FINAL (UPDATED & FIXED)
+# intasend_handler.py
 # IntaSend webhook handler (LIVE, multi-tenant, reference-based)
 
-import os
-import hmac
-import hashlib
 import logging
 from datetime import datetime
-import requests
 
+import requests
 from flask import Blueprint, request, jsonify, current_app
 
 from rentme.extensions import db, socketio, csrf
@@ -17,9 +14,10 @@ from rentme.models import (
     User,
     Invoice,
     SubscriptionIntent,
+    Property,
+    Unit,
 )
 from rentme.services.subscriptions import activate_paid_subscription
-from rentme.models import Payment, Property, Unit, User
 
 # --------------------------------------------------
 # Blueprint (PUBLIC — NO AUTH)
@@ -27,27 +25,10 @@ from rentme.models import Payment, Property, Unit, User
 intasend_bp = Blueprint("intasend_bp", __name__, url_prefix="/intasend")
 
 # --------------------------------------------------
-# Config & Logging
+# Logging
 # --------------------------------------------------
-INTASEND_WEBHOOK_SECRET = os.getenv("INTASEND_WEBHOOK_SECRET")
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("intasend")
-
-# --------------------------------------------------
-# Security — Signature Verification
-# --------------------------------------------------
-def verify_intasend_signature(raw_body: bytes, signature: str) -> bool:
-    if not signature or not INTASEND_WEBHOOK_SECRET:
-        return False
-
-    computed = hmac.new(
-        INTASEND_WEBHOOK_SECRET.encode(),
-        raw_body,
-        hashlib.sha256,
-    ).hexdigest()
-
-    return hmac.compare_digest(computed, signature)
 
 # --------------------------------------------------
 # Verify payment with IntaSend API (SERVER TRUST)
@@ -71,41 +52,52 @@ def verify_intasend_transaction(invoice_id: str) -> bool:
             timeout=20,
         )
     except Exception:
-        logger.exception("❌ IntaSend verification failed")
+        logger.exception("❌ IntaSend verification request failed")
         return False
 
     if resp.status_code != 200:
-        logger.error("❌ Verification error: %s", resp.text)
+        logger.error("❌ Verification HTTP error: %s", resp.text)
         return False
 
     data = resp.json()
     return data.get("state") == "COMPLETE"
 
 # --------------------------------------------------
-# Core webhook — RENT PAYMENTS
+# RENT PAYMENTS WEBHOOK
 # --------------------------------------------------
-
 @intasend_bp.route("/webhooks/payment", methods=["POST"])
 @csrf.exempt
 def intasend_payment_webhook():
     payload = request.get_json(silent=True) or {}
+    logger.info("📨 IntaSend payment payload: %s", payload)
 
+    # IntaSend uses `state`
     if payload.get("state") != "COMPLETE":
         return jsonify(ok=True), 200
 
     invoice_id = payload.get("invoice_id")
-    amount = float(payload.get("amount", 0))
-    reference = payload.get("reference")   # e.g. TG3
+    amount = float(payload.get("value", 0))
+    reference = payload.get("api_ref") or payload.get("reference")
 
-    if not invoice_id or not reference:
-        return jsonify(ok=False), 200
-
-    if Payment.query.filter_by(transaction_id=invoice_id).first():
+    if not invoice_id or not reference or amount <= 0:
+        logger.warning("❌ Invalid payment payload")
         return jsonify(ok=True), 200
 
+    # 🔐 Server-side verification (REAL security)
+    if not verify_intasend_transaction(invoice_id):
+        logger.error("❌ Payment verification failed for %s", invoice_id)
+        return jsonify(ok=True), 200
+
+    # Idempotency
+    if Payment.query.filter_by(transaction_id=invoice_id).first():
+        logger.info("🔁 Duplicate payment ignored: %s", invoice_id)
+        return jsonify(ok=True), 200
+
+    # Resolve unit via payment reference
     unit = Unit.query.filter_by(payment_ref=reference).first()
     if not unit:
-        return jsonify(ok=False), 200
+        logger.error("❌ No unit found for reference %s", reference)
+        return jsonify(ok=True), 200
 
     property_obj = Property.query.get(unit.property_id)
     landlord = User.query.get(property_obj.landlord_id)
@@ -124,22 +116,42 @@ def intasend_payment_webhook():
         raw_payload=payload,
     )
 
-    db.session.add(payment)
-    unit.last_paid_at = datetime.utcnow()
-    db.session.commit()
+    try:
+        db.session.add(payment)
+        unit.last_paid_at = datetime.utcnow()
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("❌ Failed to record rent payment")
+        return jsonify(ok=True), 200
 
+    # Realtime notify (optional)
+    if socketio:
+        socketio.emit(
+            "rent_payment_received",
+            {
+                "unit_id": unit.id,
+                "amount": amount,
+                "reference": reference,
+            },
+            broadcast=True,
+        )
+
+    logger.info("💰 Rent payment recorded: %s", invoice_id)
     return jsonify(ok=True), 200
 
 # --------------------------------------------------
-# Core webhook — SUBSCRIPTIONS
+# SUBSCRIPTION WEBHOOK
 # --------------------------------------------------
 @intasend_bp.route("/webhook", methods=["POST"])
 @csrf.exempt
 def intasend_subscription_webhook():
     data = request.get_json(silent=True) or {}
+    logger.info("📨 IntaSend subscription payload: %s", data)
+
     reference = data.get("api_ref")
     invoice_id = data.get("invoice_id")
-    status = (data.get("status") or "").upper()
+    state = (data.get("state") or data.get("status") or "").upper()
 
     if not reference:
         return jsonify(ok=True), 200
@@ -153,21 +165,16 @@ def intasend_subscription_webhook():
         return jsonify(ok=True), 200
 
     intent.payment_invoice_id = invoice_id
-    intent.transaction_id = (
-        data.get("transaction_id")
-        or data.get("mpesa_reference")
-    )
-    intent.amount = data.get("amount", intent.amount)
-    intent.charge = data.get("charge", 0)
-    intent.clearing_status = data.get("clearing_status")
+    intent.transaction_id = data.get("mpesa_reference")
+    intent.amount = float(data.get("value", intent.amount))
     intent.updated_at = datetime.utcnow()
 
-    if status != "COMPLETE":
-        intent.status = status
+    if state != "COMPLETE":
+        intent.status = state
         db.session.commit()
         return jsonify(ok=True), 200
 
-    # Server-side verification
+    # 🔐 Server-side verification
     if not verify_intasend_transaction(invoice_id):
         intent.status = "FAILED"
         db.session.commit()
@@ -177,4 +184,5 @@ def intasend_subscription_webhook():
     intent.status = "COMPLETE"
     db.session.commit()
 
+    logger.info("🎉 Subscription activated: %s", reference)
     return jsonify(ok=True), 200
