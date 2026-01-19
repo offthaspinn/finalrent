@@ -220,3 +220,19 @@ class CreatePropertyForm(FlaskForm):
     )
 
     submit = SubmitField("Create")    
+
+
+# ======================================================
+# 🏠 UNIT FORM
+# ======================================================
+class UnitForm(FlaskForm):
+    house_no = StringField(
+        "House / Unit Number",
+        validators=[DataRequired(), Length(max=20)],
+        render_kw={
+            "autocomplete": "off",
+            "placeholder": "e.g. A1, B2, 101"
+        }
+    )
+
+    submit = SubmitField("Save Unit")

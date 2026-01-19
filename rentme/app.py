@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 import random
 from rentme.forms import CreatePropertyForm
 from rentme.forms import UnitForm
+from uuid import uuid4
 
 from flask import (
     Flask,
@@ -555,6 +556,7 @@ def create_property():
 
 
 #UNITS'''''''''''''''''''''''''''''''''''''''''''''''''
+
 @app.route("/units/create/<int:property_id>", methods=["POST"])
 @login_required
 def create_unit(property_id):
@@ -565,27 +567,35 @@ def create_unit(property_id):
 
     form = UnitForm()
     if not form.validate_on_submit():
+        flash("Invalid unit data.", "danger")
         return redirect(url_for("view_property", property_id=property_id))
 
-    unit_no = form.unit_number.data.strip()
-    payment_ref = generate_unit_reference(property_obj.reference, unit_no)  # 🔑 TG3
+    house_no = form.house_no.data.strip()
 
-    # HARD SAFETY
+    # 🔐 Generate payment reference (system-controlled)
+    payment_ref = f"UNIT-{property_obj.id}-{uuid4().hex[:8]}"
+
+    # 🔒 Extra safety (almost never triggers, but correct)
     if Unit.query.filter_by(payment_ref=payment_ref).first():
-        flash("This unit reference already exists.", "danger")
+        flash("Payment reference collision. Please try again.", "danger")
         return redirect(url_for("view_property", property_id=property_id))
 
     unit = Unit(
         property_id=property_obj.id,
-        unit_number=unit_no,
+        house_no=house_no,
         payment_ref=payment_ref
     )
 
     db.session.add(unit)
     db.session.commit()
 
-    flash(f"Unit created. Tenants pay using account {payment_ref}", "success")
+    flash(
+        f"Unit created successfully. Tenants pay using reference {payment_ref}",
+        "success"
+    )
+
     return redirect(url_for("view_property", property_id=property_id))
+
 
 @app.route("/logout")
 @login_required
