@@ -1,10 +1,6 @@
-# intasend_core.py
-import os
+from flask import current_app
 import requests
 import logging
-
-INTASEND_BASE_URL = "https://api.intasend.com/api/v1"
-INTASEND_PUBLIC_KEY = os.getenv("INTASEND_PUBLIC_KEY")  # ✅ USE PUBLIC KEY
 
 logger = logging.getLogger("intasend")
 
@@ -19,6 +15,9 @@ def create_intasend_invoice(
     if amount <= 0:
         raise ValueError("Amount must be greater than zero")
 
+    base_url = current_app.config["INTASEND_BASE_URL"]
+    public_key = current_app.config["INTASEND_PUBLIC_KEY"]
+
     payload = {
         "amount": float(amount),
         "currency": "KES",
@@ -28,17 +27,14 @@ def create_intasend_invoice(
 
     if phone:
         payload["phone_number"] = phone
-
     if email:
         payload["email"] = email
 
-    logger.info("📨 Creating IntaSend invoice: %s", payload)
-
     response = requests.post(
-        f"{INTASEND_BASE_URL}/checkout/",
+        f"{base_url}/checkout/",
         json=payload,
         headers={
-            "Authorization": f"Bearer {INTASEND_SECRET_KEY}",
+            "Authorization": f"Bearer {public_key}",
             "Content-Type": "application/json",
         },
         timeout=20,
@@ -53,5 +49,3 @@ def create_intasend_invoice(
         "reference": reference,
         "amount": amount,
     }
-
-

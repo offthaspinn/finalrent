@@ -13,6 +13,7 @@ from dateutil.relativedelta import relativedelta
 from dotenv import load_dotenv
 import random
 from rentme.forms import CreatePropertyForm
+from rentme.forms import UnitForm
 
 from flask import (
     Flask,
@@ -75,6 +76,19 @@ from rentme.utils.phones import normalize_msisdn
 from rentme.utils.tokens import generate_reset_token, verify_reset_token
 from rentme.utils.security import mask_secret
 from rentme.utils.references import generate_property_ref, generate_unit_reference
+
+
+
+def validate_payment_config(app):
+    required = [
+        "INTASEND_SECRET_KEY",
+        "INTASEND_PUBLIC_KEY",
+        "INTASEND_BASE_URL",
+    ]
+
+    for key in required:
+        if not app.config.get(key):
+            raise RuntimeError(f"❌ Missing required config: {key}")
 
 
 
@@ -141,17 +155,6 @@ csrf.init_app(app)
 csrf.exempt(intasend_bp)
 socketio.init_app(app)  # <-- important
 
-
-def validate_payment_config(app):
-    required = [
-        "INTASEND_SECRET_KEY",
-        "INTASEND_PUBLIC_KEY",
-        "INTASEND_BASE_URL",
-    ]
-
-    for key in required:
-        if not app.config.get(key):
-            raise RuntimeError(f"❌ Missing required config: {key}")
 
 
 # -----------------------
