@@ -1,12 +1,10 @@
 # intasend_core.py
-# Core IntaSend payment initiation logic
-
 import os
 import requests
 import logging
 
 INTASEND_BASE_URL = "https://api.intasend.com/api/v1"
-INTASEND_PUBLIC_KEY = os.getenv("INTASEND_PUBLIC_KEY")  # ✅ FIX
+INTASEND_PUBLIC_KEY = os.getenv("INTASEND_PUBLIC_KEY")  # ✅ USE PUBLIC KEY
 
 logger = logging.getLogger("intasend")
 
