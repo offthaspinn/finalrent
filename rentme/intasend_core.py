@@ -38,7 +38,7 @@ def create_intasend_invoice(
         f"{INTASEND_BASE_URL}/checkout/",
         json=payload,
         headers={
-            "Authorization": f"Bearer {INTASEND_PUBLIC_KEY}",  # ✅ FIX
+            "Authorization": f"Bearer {INTASEND_SECRET_KEY}",
             "Content-Type": "application/json",
         },
         timeout=20,
@@ -53,3 +53,5 @@ def create_intasend_invoice(
         "reference": reference,
         "amount": amount,
     }
+
+

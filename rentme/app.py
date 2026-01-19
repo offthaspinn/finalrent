@@ -98,8 +98,18 @@ migrate = Migrate()
 app = Flask(__name__, static_folder="static", template_folder="templates")
 from rentme.routes import *
 
-
 app.config.from_object(Config)
+
+# 🔒 FAIL FAST IN PRODUCTION
+if app.config.get("FLASK_ENV") == "production":
+
+    # Validate payment configuration
+    validate_payment_config(app)
+
+    # Validate core security config
+    if not app.config.get("SECRET_KEY"):
+        raise RuntimeError("❌ SECRET_KEY missing")
+
 
 # Redis connection (optional, for production rate limiting)
 REDIS_URL = os.getenv("REDIS_URL")
@@ -113,11 +123,6 @@ limiter = Limiter(
 # -----------------------
 # Environment overrides
 # -----------------------
-SECRET_KEY = os.getenv("SECRET_KEY")
-if not SECRET_KEY:
-    raise RuntimeError("SECRET_KEY not set")
-
-app.config["SECRET_KEY"] = SECRET_KEY
 
 db_url = os.getenv("SQLALCHEMY_DATABASE_URI")
 app.config["SQLALCHEMY_DATABASE_URI"] = db_url
@@ -135,6 +140,18 @@ migrate.init_app(app, db)
 csrf.init_app(app)
 csrf.exempt(intasend_bp)
 socketio.init_app(app)  # <-- important
+
+
+def validate_payment_config(app):
+    required = [
+        "INTASEND_SECRET_KEY",
+        "INTASEND_PUBLIC_KEY",
+        "INTASEND_BASE_URL",
+    ]
+
+    for key in required:
+        if not app.config.get(key):
+            raise RuntimeError(f"❌ Missing required config: {key}")
 
 
 # -----------------------
