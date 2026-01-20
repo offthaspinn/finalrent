@@ -45,6 +45,13 @@ class MpesaCredential(db.Model):
 # ==============================================================
 # USER MODEL (Each user has own tenants + own MPESA credentials)
 # ==============================================================
+from datetime import datetime
+from flask_login import UserMixin
+from werkzeug.security import generate_password_hash, check_password_hash
+
+from rentme.extensions import db
+
+
 class User(db.Model, UserMixin):
     __tablename__ = "user"
 
@@ -54,6 +61,11 @@ class User(db.Model, UserMixin):
     # Identity
     # -------------------------
     full_name = db.Column(db.String(180), nullable=True)
+
+    # ✅ NEW (IntaSend compatible)
+    first_name = db.Column(db.String(80), nullable=True)
+    last_name = db.Column(db.String(80), nullable=True)
+
     email = db.Column(db.String(256), unique=True, nullable=False, index=True)
     login_phone = db.Column(db.String(20), unique=True, nullable=True, index=True)
     password_hash = db.Column(db.String(256), nullable=False)
@@ -102,6 +114,29 @@ class User(db.Model, UserMixin):
         return check_password_hash(self.password_hash, pwd)
 
     # =========================
+    # NAME HELPERS (SAFE)
+    # =========================
+    @property
+    def first_name_safe(self):
+        if self.first_name:
+            return self.first_name
+        if self.full_name:
+            return self.full_name.split(" ")[0]
+        return "Customer"
+
+    @property
+    def last_name_safe(self):
+        if self.last_name:
+            return self.last_name
+        if self.full_name and len(self.full_name.split(" ")) > 1:
+            return " ".join(self.full_name.split(" ")[1:])
+        return ""
+
+    @property
+    def display_name(self):
+        return f"{self.first_name_safe} {self.last_name_safe}".strip()
+
+    # =========================
     # SUBSCRIPTION HELPERS
     # =========================
     def active_subscription(self):
@@ -144,6 +179,7 @@ class User(db.Model, UserMixin):
 
     def __repr__(self):
         return f"<User {self.email} | admin={self.is_admin}>"
+
 
 class LandlordSettings(db.Model):
     id = db.Column(db.Integer, primary_key=True)

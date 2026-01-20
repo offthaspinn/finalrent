@@ -6,14 +6,23 @@ from wtforms.validators import DataRequired, Email, EqualTo, Optional, Length
 
 # ======================================================
 # 🔐 REGISTER FORM
-# ======================================================
 class RegisterForm(FlaskForm):
-    full_name = StringField(
-        "Full Name",
+    first_name = StringField(
+        "First Name",
         validators=[DataRequired()],
         render_kw={
-            "autocomplete": "off",
-            "autocapitalize": "off",
+            "autocomplete": "given-name",
+            "autocapitalize": "words",
+            "spellcheck": "false",
+        },
+    )
+
+    last_name = StringField(
+        "Last Name",
+        validators=[DataRequired()],
+        render_kw={
+            "autocomplete": "family-name",
+            "autocapitalize": "words",
             "spellcheck": "false",
         },
     )
@@ -25,7 +34,8 @@ class RegisterForm(FlaskForm):
     )
 
     login_phone = StringField(
-        "Phone", render_kw={"autocomplete": "off", "inputmode": "tel"}
+        "Phone",
+        render_kw={"autocomplete": "off", "inputmode": "tel"},
     )
 
     password = PasswordField(
@@ -41,7 +51,6 @@ class RegisterForm(FlaskForm):
     )
 
     submit = SubmitField("Register")
-
 
 # ======================================================
 # 🔑 LOGIN FORM

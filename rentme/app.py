@@ -115,6 +115,14 @@ from rentme.routes import *
 
 app.config.from_object(Config)
 
+app.logger.warning(
+    "INTASEND FINAL → ENV=%s | URL=%s | KEY=%s",
+    app.config["INTASEND_ENV"],
+    app.config["INTASEND_BASE_URL"],
+    app.config["INTASEND_SECRET_KEY"][:12],
+)
+
+
 # 🔒 FAIL FAST IN PRODUCTION
 if app.config.get("FLASK_ENV") == "production":
 

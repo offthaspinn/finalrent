@@ -1,14 +1,19 @@
+from flask_wtf.csrf import CSRFProtect
 import os
 from dotenv import load_dotenv
-from flask_wtf.csrf import CSRFProtect
 
-# Load .env file
 load_dotenv()
 
 
 class Config:
-    SECRET_KEY = os.environ.get("SECRET_KEY")
-    FLASK_ENV = "production"
+    # ---------------------------
+    # Core
+    # ---------------------------
+    SECRET_KEY = os.getenv("SECRET_KEY")
+    FLASK_ENV = os.getenv("FLASK_ENV", "production")
+
+    SQLALCHEMY_DATABASE_URI = os.getenv("DATABASE_URL")
+    SQLALCHEMY_TRACK_MODIFICATIONS = False
 
     # ---------------------------
     # Security
@@ -22,20 +27,18 @@ class Config:
     WTF_CSRF_ENABLED = True
     WTF_CSRF_TIME_LIMIT = 3600
 
-    SQLALCHEMY_TRACK_MODIFICATIONS = False
-
     # ---------------------------
     # Email
     # ---------------------------
-    MAILAPI_KEY = os.environ.get("MAILAPI_KEY")
-    EMAIL_FROM = os.environ.get("EMAIL_FROM")
-    BASE_URL = os.environ.get("BASE_URL")
+    MAILAPI_KEY = os.getenv("MAIL_API_KEY")
+    EMAIL_FROM = os.getenv("EMAIL_FROM")
+    BASE_URL = os.getenv("BASE_URL")
 
     # ---------------------------
     # MPesa
     # ---------------------------
-    MPESA_ENV = os.environ.get("MPESA_ENV", "sandbox")
-    CALLBACK_BASE = os.environ.get("CALLBACK_BASE")
+    MPESA_ENV = os.getenv("MPESA_ENV", "sandbox")
+    CALLBACK_BASE = os.getenv("MPESA_CALLBACK")
 
     # ---------------------------
     # Flutterwave
@@ -46,16 +49,16 @@ class Config:
     FLW_BASE_URL = os.getenv("FLW_BASE_URL", "https://api.flutterwave.com/v3")
 
     # ---------------------------
-    # IntaSend (FIXED)
+    # IntaSend ✅ SINGLE SOURCE
     # ---------------------------
-    INTASEND_ENV = os.getenv("INTASEND_ENV", "sandbox")
+    INTASEND_ENV = os.getenv("INTASEND_ENV", "live")
 
     INTASEND_PUBLIC_KEY = os.getenv("INTASEND_PUBLIC_KEY")
     INTASEND_SECRET_KEY = os.getenv("INTASEND_SECRET_KEY")
-    INTASEND_WEBHOOK_SECRET = os.getenv("INTASEND_WEBHOOK_SECRET")
 
     INTASEND_BASE_URL = (
         "https://sandbox.intasend.com/api/v1"
         if INTASEND_ENV == "sandbox"
         else "https://api.intasend.com/api/v1"
     )
+

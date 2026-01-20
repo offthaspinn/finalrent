@@ -13,7 +13,6 @@ from uuid import uuid4
 
 from rentme.models import Plan, Subscription, SubscriptionIntent
 from rentme.forms import SubscriptionForm
-from rentme.utils import normalize_msisdn
 from rentme.intasend_core import create_intasend_invoice
 from rentme.extensions import db
 
@@ -48,16 +47,17 @@ def pay_plan(plan_id):
         return redirect(url_for("subscriptions.list_plans"))
 
     plan = Plan.query.get_or_404(plan_id)
-    phone_number = normalize_msisdn(form.phone.data)
 
     # --------------------------------------------------------
     # Create payment intent
     # --------------------------------------------------------
+    payment_ref = f"IPLAN-{plan.id}-{uuid4().hex[:10]}"
+
     try:
         intent = SubscriptionIntent(
             user_id=current_user.id,
             plan_id=plan.id,
-            reference=f"IPLAN-{plan.id}-{uuid4().hex[:10]}",
+            reference=payment_ref,
             amount=plan.price,
             status="PENDING",
             payer_account=current_user.email,
@@ -71,14 +71,15 @@ def pay_plan(plan_id):
         return redirect(url_for("subscriptions.list_plans"))
 
     # --------------------------------------------------------
-    # Create IntaSend invoice (ONLY supported params)
+    # Create IntaSend invoice (CHECKOUT API)
     # --------------------------------------------------------
     try:
         response = create_intasend_invoice(
             amount=plan.price,
-            reference=intent.reference,
-            phone=phone_number,
+            reference=payment_ref,
             email=current_user.email,
+            first_name=current_user.first_name_safe,
+            last_name=current_user.last_name_safe,
             description=f"{plan.name} subscription",
         )
     except Exception:
