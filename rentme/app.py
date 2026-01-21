@@ -358,7 +358,7 @@ def register():
 
         # ✅ Create user
         user = User(
-            full_name=form.full_name.data.strip(),
+            full_name=f"{form.first_name.data.strip()} {form.last_name.data.strip()}",
             email=email,
             login_phone=phone,
             password_hash=generate_password_hash(form.password.data),
