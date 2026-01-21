@@ -6,67 +6,65 @@ from flask import current_app
 logger = logging.getLogger("intasend")
 
 
-def create_intasend_invoice(
+def initiate_intasend_mpesa(
     *,
     amount: float,
     reference: str,
+    phone_number: str,
     email: str,
     first_name: str,
     last_name: str,
-    description: str = "Rent Payment",
+    description: str = "Subscription Payment",
 ):
     """
-    Create an IntaSend hosted checkout invoice.
+    Initiate an IntaSend MPESA STK Push.
 
     IMPORTANT:
-    - Uses PUBLIC KEY (required for /checkout/)
-    - Works in both sandbox & live
+    - Uses SECRET KEY
+    - No redirects
+    - Webhook-driven completion
     """
 
     if amount <= 0:
         raise ValueError("Amount must be greater than zero")
 
-    # Safety defaults (IntaSend requires names)
     first_name = (first_name or "Customer").strip()
     last_name = (last_name or "User").strip()
 
     payload = {
         "amount": float(amount),
         "currency": "KES",
+        "phone_number": phone_number,  # MUST be 2547XXXXXXXX
         "email": email,
         "first_name": first_name,
         "last_name": last_name,
         "api_ref": reference,
-        "redirect_url": f"{current_app.config['BASE_URL']}/subscriptions/complete",
-        "description": description,
+        "comment": description,
+        "callback_url": f"{current_app.config['BASE_URL']}/intasend/webhook",
     }
 
     base_url = current_app.config["INTASEND_BASE_URL"]
-    public_key = current_app.config["INTASEND_PUBLIC_KEY"]
+    secret_key = current_app.config["INTASEND_SECRET_KEY"]
 
-    logger.info("📨 Creating IntaSend invoice: %s", payload)
-    logger.info("🔐 Using IntaSend PUBLIC key prefix: %s", public_key[:12])
+    logger.info("📲 Initiating IntaSend MPESA STK: %s", payload)
+    logger.info("🔐 Using IntaSend SECRET key prefix: %s", secret_key[:12])
 
     response = requests.post(
-        f"{base_url}/checkout/",
+        f"{base_url}/payment/mpesa/",
         json=payload,
         headers={
-            # ✅ REQUIRED for checkout
-            "X-IntaSend-Public-Key": public_key,
+            "Authorization": f"Bearer {secret_key}",
             "Content-Type": "application/json",
         },
         timeout=20,
     )
 
     if not response.ok:
-        logger.error("❌ IntaSend error response [%s]: %s", response.status_code, response.text)
+        logger.error(
+            "❌ IntaSend MPESA error [%s]: %s",
+            response.status_code,
+            response.text,
+        )
 
     response.raise_for_status()
-    data = response.json()
-
-    return {
-        "invoice_id": data.get("id"),
-        "payment_url": data.get("url"),
-        "reference": reference,
-        "amount": amount,
-    }
+    return response.json()

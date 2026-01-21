@@ -15,7 +15,7 @@ import random
 from rentme.forms import CreatePropertyForm
 from rentme.forms import UnitForm
 from uuid import uuid4
-
+from rentme.routes.mpesa import mpesa_bp
 from flask import (
     Flask,
     render_template,
@@ -226,7 +226,7 @@ print("✅ Intasend Blueprint active at /mpesa")
 app.register_blueprint(subscriptions_bp)
 print("✅ Subscriptions Blueprint active")
 
-
+app.register_blueprint(mpesa_bp)
 
 
 # -----------------------
